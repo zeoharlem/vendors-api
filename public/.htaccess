@@ -1,0 +1,14 @@
+Options -Indexes
+
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /vendors-api/
+
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteRule ^ - [END]
+
+    RewriteRule ^ index.php [END]
+</IfModule>

@@ -1,0 +1,11 @@
+
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Do not expose application files from the project root.
+    RewriteRule ^(app|database|docs|vendor|tests|var)(/|$) - [F,L,NC]
+    RewriteRule (^|/)\. - [F,L]
+    RewriteRule ^(composer\.(json|lock)|phpunit\.xml|Dockerfile|docker-compose\.yml)$ - [F,L,NC]
+</IfModule>

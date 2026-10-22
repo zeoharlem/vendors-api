@@ -1,0 +1,38 @@
+{
+  "name": "marketplace/phalcon-api",
+  "description": "Modular multivendor REST API using Phalcon and Clean Architecture",
+  "type": "project",
+  "require": {
+    "php": "^8.2",
+    "ext-json": "*",
+    "ext-pdo": "*",
+    "ext-pdo_pgsql": "*",
+    "ext-phalcon": "^5.23",
+    "vlucas/phpdotenv": "^5.6"
+  },
+  "require-dev": {
+    "phalcon/ide-stubs": "^v5.0",
+    "phalcon/migrations": "^3.0",
+    "phpstan/phpstan": "^2.0",
+    "phpunit/phpunit": "^11.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "phpunit",
+    "analyse": "phpstan analyse app --level=6",
+    "check-phalcon": "php -r \"echo extension_loaded('phalcon') ? Phalcon\\\\Version::get() : 'Phalcon extension missing'; echo PHP_EOL;\""
+  },
+  "config": {
+    "sort-packages": true,
+    "optimize-autoloader": true
+  }
+}
