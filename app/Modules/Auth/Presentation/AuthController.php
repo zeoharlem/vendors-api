@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Modules\Auth\Presentation;
 
+use App\Modules\Auth\Application\InvalidCredentialsException;
 use App\Modules\Auth\Application\RegistrationEmailExistsException;
+use App\Modules\Auth\Presentation\Validators\LoginRequestValidator;
 use App\Modules\Auth\Presentation\Validators\RegisterRequestValidator;
 use Phalcon\Http\Response;
 use Phalcon\Mvc\Controller;
@@ -22,10 +24,77 @@ final class AuthController extends Controller
 
     public function loginAction(): Response
     {
-        // Implement login here.
-        return $this->jsonResponder->success([
-            'message' => 'Login endpoint reached',
-        ]);
+        $body = $this->request->getJsonRawBody(true);
+
+        if (!is_array($body)) {
+            return $this->jsonResponder->error(
+                'INVALID_REQUEST',
+                'A valid JSON request body is required.',
+                400,
+            );
+        }
+
+        $fields = [
+            'email' => $body['email'] ?? null,
+            'password' => $body['password'] ?? null,
+        ];
+
+        $typeErrors = [];
+
+        foreach ($fields as $field => $value) {
+            if (!is_string($value)) {
+                $typeErrors[$field][] = "The {$field} field must be a string.";
+            }
+        }
+
+        if ($typeErrors !== []) {
+            return $this->jsonResponder->error(
+                'VALIDATION_ERROR',
+                'One or more fields have invalid data types.',
+                422,
+                $typeErrors,
+            );
+        }
+
+        $fields['email'] = strtolower(trim($fields['email']));
+
+        $validation = new LoginRequestValidator();
+
+        $messages = $validation->validate($fields);
+
+        $errors = [];
+
+        foreach ($messages as $message) {
+            $errors[$message->getField()][] = $message->getMessage();
+        }
+
+        if ($errors !== []) {
+            return $this->jsonResponder->error(
+                'VALIDATION_ERROR',
+                'Please provide a valid email and password.',
+                422,
+                $errors,
+            );
+        }
+
+
+        try {
+            $result = $this->loginUserService->login($fields);
+
+            return $this->jsonResponder->success($result);
+        } catch (InvalidCredentialsException $exception) {
+            return $this->jsonResponder->error(
+                'INVALID_CREDENTIALS',
+                'The email or password is incorrect.',
+                401,
+            );
+        } catch (Throwable $exception) {
+            return $this->jsonResponder->error(
+                'LOGIN_FAILED',
+                'Unable to complete login at this time.',
+                500,
+            );
+        }
     }
 
     public function registerAction(): Response
@@ -131,7 +200,7 @@ final class AuthController extends Controller
 
             return $this->jsonResponder->error(
                 'REGISTRATION_FAILED',
-                'Unable to complete registration at this time.:->'.$exception->getMessage(),
+                'Unable to complete registration at this time.:->' . $exception->getMessage(),
                 500,
             );
         }
