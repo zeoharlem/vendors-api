@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Bootstrap;
 
 use App\Bootstrap\Routes\ApiRoutes;
-use App\Modules\Catalog\Presentation\ProductController;
+use App\Modules\Auth\Application\Services\RegisterUserService;
 use App\Shared\Http\JsonResponder;
 use Phalcon\Di\FactoryDefault;
 use Phalcon\Mvc\Application;
@@ -16,6 +16,7 @@ use App\Shared\Security\JwtAuthMiddleware;
 use App\Shared\Security\JwtService;
 use Phalcon\Events\Manager as EventsManager;
 use Phalcon\Mvc\Dispatcher;
+use Phalcon\Mvc\Model\Transaction\Manager;
 
 final class ApplicationFactory
 {
@@ -78,6 +79,18 @@ final class ApplicationFactory
             ApiRoutes::register($router);
             return $router;
         });
+
+        //Transactions
+        $di->setShared('transactions', fn(): Manager => new Manager($di));
+
+        /**
+         * Services registration
+         * @example RegisterUserServices
+         */
+        $di->setShared(
+            'registerUserService',
+            fn(): RegisterUserService => new RegisterUserService($di->getShared('transactions')),
+        );
 
         //Dispatcher Injection
         $di->setShared('dispatcher', function () use ($di): Dispatcher {
