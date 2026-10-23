@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Bootstrap;
 
 use App\Bootstrap\Routes\ApiRoutes;
+use App\Modules\Auth\Application\Services\LoginUserService;
 use App\Modules\Auth\Application\Services\RegisterUserService;
 use App\Shared\Http\JsonResponder;
 use Phalcon\Di\FactoryDefault;
@@ -90,6 +91,11 @@ final class ApplicationFactory
         $di->setShared(
             'registerUserService',
             fn(): RegisterUserService => new RegisterUserService($di->getShared('transactions')),
+        );
+
+        $di->setShared(
+            'loginUserService',
+            fn(): LoginUserService => new LoginUserService($di->getShared('jwtService')),
         );
 
         //Dispatcher Injection

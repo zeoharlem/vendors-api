@@ -1,3 +1,6 @@
 .env
 /vendor
 /.vscode
+/public/check2.php
+/public/orm-check.php
+/public/runcheck.php
