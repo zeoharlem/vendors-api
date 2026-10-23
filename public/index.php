@@ -7,6 +7,9 @@ use Dotenv\Dotenv;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
+//this fix the socket hang up on mac
+putenv('PGGSSENCMODE=disable');
+
 $root = dirname(__DIR__);
 if (is_file($root . '/.env')) {
     Dotenv::createImmutable($root)->safeLoad();
