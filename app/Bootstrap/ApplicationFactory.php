@@ -6,6 +6,7 @@ namespace App\Bootstrap;
 
 use App\Bootstrap\Routes\ApiRoutes;
 use App\Modules\Auth\Application\Services\LoginUserService;
+use App\Modules\Auth\Application\Services\RefreshTokenService;
 use App\Modules\Auth\Application\Services\RegisterUserService;
 use App\Shared\Http\JsonResponder;
 use Phalcon\Di\FactoryDefault;
@@ -47,6 +48,10 @@ final class ApplicationFactory
                 'username' => $_ENV['DB_USERNAME'] ?? 'postgres',
                 'password' => $_ENV['DB_PASSWORD'] ?? '',
             ],
+            'auth' => [
+                'access_token_ttl' => (int) ($_ENV['JWT_TTL'] ?? 900),
+                'refresh_token_ttl' => (int) ($_ENV['REFRESH_TOKEN_TTL'] ?? 2592000),
+            ],
         ]);
 
         //Database Injection
@@ -84,6 +89,19 @@ final class ApplicationFactory
         //Transactions
         $di->setShared('transactions', fn(): Manager => new Manager($di));
 
+        $di->setShared(
+            'refreshTokenService',
+            function () use ($di): RefreshTokenService {
+                $db = $di->getShared('db');
+
+                return new RefreshTokenService(
+                    $db->getInternalHandler(),
+                    $di->getShared('jwtService'),
+                    (int) $di->getShared('config')['auth']['refresh_token_ttl'],
+                );
+            },
+        );
+
         /**
          * Services registration
          * @example RegisterUserServices
@@ -95,7 +113,10 @@ final class ApplicationFactory
 
         $di->setShared(
             'loginUserService',
-            fn(): LoginUserService => new LoginUserService($di->getShared('jwtService')),
+            fn(): LoginUserService => new LoginUserService(
+                $di->getShared('jwtService'),
+                $di->getShared('refreshTokenService')
+            ),
         );
 
         //Dispatcher Injection

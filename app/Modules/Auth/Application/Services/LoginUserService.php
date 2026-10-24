@@ -12,6 +12,7 @@ final class LoginUserService
 {
     public function __construct(
         private readonly JwtService $jwtService,
+        private readonly RefreshTokenService $refreshTokenService,
     ) {
     }
 
@@ -69,11 +70,13 @@ final class LoginUserService
         }
 
         $accessToken = $this->jwtService->issueAccessToken($userId);
+        $refreshToken = $this->refreshTokenService->issue($userId);
 
         return [
             'access_token' => $accessToken,
             'token_type' => 'Bearer',
             'expires_in' => 900,
+            'refresh_token' => $refreshToken,
             'user' => [
                 'id' => $userId,
                 'email' => (string) $user->email,
