@@ -18,6 +18,6 @@ $jwtService = new JwtService(
 );
 
 // Replace this with a real user ID if your service expects one.
-$token = $jwtService->issueAccessToken('user');
+$token = $jwtService->issueAccessToken('user','family-id');
 
 echo $token . PHP_EOL;

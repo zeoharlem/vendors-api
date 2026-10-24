@@ -23,8 +23,9 @@ final class RefreshTokenService
 
     /**
      * Issue the first refresh token for a login session.
+     * @return array{refresh_token: string, family_id: string}
      */
-    public function issue(string $userId): string
+    public function issue(string $userId): array
     {
         $token = $this->generateToken();
 
@@ -32,14 +33,17 @@ final class RefreshTokenService
             <<<'SQL'
                 INSERT INTO refresh_tokens (
                     user_id,
+                    family_id,
                     token_hash,
                     expires_at
                 )
                 VALUES (
                     :user_id,
+                    gen_random_uuid(),
                     :token_hash,
                     NOW() + (:ttl * INTERVAL '1 second')
                 )
+                RETURNING family_id
             SQL
         );
 
@@ -49,7 +53,16 @@ final class RefreshTokenService
             'ttl' => $this->refreshTokenTtl,
         ]);
 
-        return $token;
+        $familyId = $statement->fetchColumn();
+
+        if (!is_string($familyId) || $familyId === '') {
+            throw new RuntimeException('Could not create refresh-token family.');
+        }
+
+        return [
+            'refresh_token' => $token,
+            'family_id' => $familyId,
+        ];
     }
 
     /**
@@ -171,7 +184,8 @@ final class RefreshTokenService
             }
 
             $accessToken = $this->jwtService->issueAccessToken(
-                (string) $current['user_id']
+                (string) $current['user_id'],
+                (string) $current['family_id']
             );
 
             $this->pdo->commit();
@@ -214,6 +228,40 @@ final class RefreshTokenService
         );
 
         $statement->execute(['token_hash' => hash('sha256', $presentedToken),]);
+    }
+
+    public function isFamilyRevoked(string $familyId): bool
+    {
+        $statement = $this->pdo->prepare(
+            <<<'SQL'
+                SELECT
+                    EXISTS (
+                        SELECT 1
+                        FROM public.refresh_tokens
+                        WHERE family_id = :familyId
+                    ) AS family_exists,
+                    EXISTS (
+                        SELECT 1
+                        FROM public.refresh_tokens
+                        WHERE family_id = :familyId
+                          AND revoked_at IS NOT NULL
+                    ) AS family_revoked
+                SQL
+        );
+
+        $statement->execute(['familyId' => $familyId,]);
+
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+        // Fail closed if the family does not exist.
+        if ($row === false) {
+            return true;
+        }
+
+        return !filter_var($row['family_exists'], FILTER_VALIDATE_BOOLEAN, ) || filter_var(
+            $row['family_revoked'],
+            FILTER_VALIDATE_BOOLEAN,
+        );
     }
 
     private function generateToken(): string

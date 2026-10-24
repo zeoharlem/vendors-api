@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Shared\Security;
 
+use App\Modules\Auth\Application\Services\RefreshTokenService;
+use App\Shared\Http\JsonResponder;
 use Phalcon\Events\Event;
 use Phalcon\Http\Request;
 use Phalcon\Http\Response;
@@ -15,7 +17,8 @@ final class JwtAuthMiddleware
     public function __construct(
         private readonly JwtService $jwtService,
         private readonly Request $request,
-        private readonly Response $response,
+        private readonly JsonResponder $jsonResponder,
+        private readonly RefreshTokenService $refreshTokenService,
     ) {
     }
 
@@ -43,11 +46,14 @@ final class JwtAuthMiddleware
         ) {
             return $this->unauthorized($dispatcher);
         }
-        
+
         try {
             $claims = $this->jwtService->validate($matches[1]);
+            if ($this->refreshTokenService->isFamilyRevoked($claims->family_id)) {
+                return $this->unauthorized($dispatcher);
+            }
         } catch (Throwable $exception) {
-            error_log('JWT validation error: ' .($exception->getPrevious()?->getMessage() ?? $exception->getMessage()));
+            error_log('JWT validation error: ' . ($exception->getPrevious()?->getMessage() ?? $exception->getMessage()));
             return $this->unauthorized($dispatcher);
         }
 
@@ -70,15 +76,8 @@ final class JwtAuthMiddleware
 
     private function unauthorized(Dispatcher $dispatcher): bool
     {
-        $this->response->setStatusCode(401, 'Unauthorized');
-
-        $this->response->setJsonContent([
-            'success' => false,
-            'message' => 'Authentication required or access token is invalid.',
-        ]);
-
-        $dispatcher->setReturnedValue($this->response);
-
+        $response = $this->jsonResponder->error('UNAUTHORIZED', 'Authentication required or access token is invalid.', 401);
+        $dispatcher->setReturnedValue($response);
         return false;
     }
 }

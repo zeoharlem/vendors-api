@@ -38,7 +38,7 @@ final class JwtService
         $this->ttl = $ttl;
     }
 
-    public function issueAccessToken(string $userId): string
+    public function issueAccessToken(string $userId, string $familyId): string
     {
         $now = time();
 
@@ -51,6 +51,7 @@ final class JwtService
             ->setIssuedAt($now)
             ->setNotBefore($now)
             ->setExpirationTime($now + $this->ttl)
+            ->addClaim('family_id', $familyId)
             ->setId(bin2hex(random_bytes(16)))
             ->setPassphrase($this->secret)
             ->getToken();
@@ -84,8 +85,12 @@ final class JwtService
             }
 
             $claims = $token->getClaims();
-
             $subject = $claims->get('sub');
+            $familyId = $claims->get('family_id');
+
+            if (!is_string($familyId) || $familyId === '') {
+                throw new RuntimeException('JWT family ID is missing.');
+            }
 
             if (!is_string($subject) || $subject === '') {
                 throw new RuntimeException('JWT subject is missing.');
@@ -98,13 +103,10 @@ final class JwtService
                 'jti' => $claims->get('jti'),
                 'iat' => $claims->get('iat'),
                 'exp' => $claims->get('exp'),
+                'family_id' => $familyId,
             ];
         } catch (Throwable $exception) {
-            throw new RuntimeException(
-                'JWT validation failed.',
-                0,
-                $exception
-            );
+            throw new RuntimeException('JWT validation failed.',0,$exception);
         }
     }
 
