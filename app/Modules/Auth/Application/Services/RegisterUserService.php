@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Auth\Application\Services;
 
-use App\Modules\Auth\Application\RegistrationEmailExistsException;
+use App\Modules\Auth\Application\Exceptions\RegistrationEmailExistsException;
 use App\Modules\Auth\Infrastructure\Models\Role;
 use App\Modules\Auth\Infrastructure\Models\User;
 use App\Shared\Database\PostgresPdoHelper;

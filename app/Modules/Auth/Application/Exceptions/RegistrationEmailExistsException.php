@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Modules\Auth\Application;
+namespace App\Modules\Auth\Application\Exceptions;
 
 use RuntimeException;
 

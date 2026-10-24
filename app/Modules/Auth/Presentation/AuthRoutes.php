@@ -33,5 +33,17 @@ final class AuthRoutes
             'action' => 'register',
         ])->setName('v1.auth.register');
 
+        $group->addPost('/auth/refresh', [
+            'namespace' => $namespace,
+            'controller' => 'Auth',
+            'action' => 'refresh',
+        ])->setName('v1.auth.refresh');
+
+        $group->addPost('/auth/logout', [
+            'namespace' => $namespace,
+            'controller' => 'Auth',
+            'action' => 'logout',
+        ])->setName('v1.auth.logout');
+
     }
 }

@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Auth\Presentation;
 
-use App\Modules\Auth\Application\InvalidCredentialsException;
-use App\Modules\Auth\Application\RegistrationEmailExistsException;
+use App\Modules\Auth\Application\Exceptions\InvalidCredentialsException;
+use App\Modules\Auth\Application\Exceptions\RegistrationEmailExistsException;
 use App\Modules\Auth\Presentation\Validators\LoginRequestValidator;
 use App\Modules\Auth\Presentation\Validators\RegisterRequestValidator;
 use Phalcon\Http\Response;
@@ -91,7 +91,7 @@ final class AuthController extends Controller
         } catch (Throwable $exception) {
             return $this->jsonResponder->error(
                 'LOGIN_FAILED',
-                'Unable to complete login at this time.',
+                'Unable to complete login at this time.:->'. $exception->getMessage(),
                 500,
             );
         }
@@ -203,6 +203,80 @@ final class AuthController extends Controller
                 'Unable to complete registration at this time.:->' . $exception->getMessage(),
                 500,
             );
+        }
+    }
+
+    public function refreshAction(): Response
+    {
+        $body = $this->request->getJsonRawBody(true);
+
+        if (
+            !is_array($body)
+            || !isset($body['refresh_token'])
+            || !is_string($body['refresh_token'])
+        ) {
+            return $this->response
+                ->setStatusCode(400, 'Bad Request')
+                ->setJsonContent([
+                    'success' => false,
+                    'message' => 'A valid refresh_token is required.',
+                ]);
+        }
+
+        try {
+            $tokens = $this->refreshTokenService->rotate(
+                $body['refresh_token']
+            );
+
+            return $this->response->setJsonContent([
+                'success' => true,
+                'data' => $tokens,
+            ]);
+        } catch (Throwable $exception) {
+            error_log('Refresh token operation failed: ' . $exception->getMessage());
+
+            return $this->response
+                ->setStatusCode(401, 'Unauthorized')
+                ->setJsonContent([
+                    'success' => false,
+                    'message' => 'The refresh token is invalid or expired. Please log in again.',
+                ]);
+        }
+    }
+
+    public function logoutAction(): Response
+    {
+        $body = $this->request->getJsonRawBody(true);
+
+        if (
+            !is_array($body)
+            || !isset($body['refresh_token'])
+            || !is_string($body['refresh_token'])
+        ) {
+            return $this->response
+                ->setStatusCode(400, 'Bad Request')
+                ->setJsonContent([
+                    'success' => false,
+                    'message' => 'A valid refresh_token is required.',
+                ]);
+        }
+
+        try {
+            $this->refreshTokenService->revoke($body['refresh_token']);
+
+            return $this->response->setJsonContent([
+                'success' => true,
+                'message' => 'Logged out successfully.',
+            ]);
+        } catch (Throwable $exception) {
+            error_log('Logout operation failed: ' . $exception->getMessage());
+
+            return $this->response
+                ->setStatusCode(500, 'Internal Server Error')
+                ->setJsonContent([
+                    'success' => false,
+                    'message' => 'Unable to complete logout.',
+                ]);
         }
     }
 }
