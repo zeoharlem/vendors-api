@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Modules\Catalog\Presentation;
+namespace App\Modules\Product\Presentation;
 
 use Phalcon\Http\Response;
 use Phalcon\Mvc\Controller;

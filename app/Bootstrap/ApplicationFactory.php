@@ -9,6 +9,10 @@ use App\Modules\Auth\Application\Services\LoginUserService;
 use App\Modules\Auth\Application\Services\RefreshTokenService;
 use App\Modules\Auth\Application\Services\RegisterUserService;
 use App\Shared\Http\JsonResponder;
+use App\Shared\Security\AclFactory;
+use App\Shared\Security\AuthorizationMiddleware;
+use App\Shared\Security\AuthorizationService;
+use Phalcon\Acl\Adapter\Memory as AclMemory;
 use Phalcon\Di\FactoryDefault;
 use Phalcon\Mvc\Application;
 use Phalcon\Mvc\Router;
@@ -42,7 +46,7 @@ final class ApplicationFactory
                 'debug' => filter_var($_ENV['APP_DEBUG'] ?? false, FILTER_VALIDATE_BOOL),
             ],
             'db' => [
-                'host' => $_ENV['DB_HOST'] ?? '127.0.0.1',
+                'host' => $_ENV['DB_HOST'] ?? 'localhost',
                 'port' => (int) ($_ENV['DB_PORT'] ?? 5432),
                 'dbname' => $_ENV['DB_NAME'] ?? 'multivendors',
                 'username' => $_ENV['DB_USERNAME'] ?? 'postgres',
@@ -78,6 +82,39 @@ final class ApplicationFactory
                 (int) ($_ENV['JWT_TTL'] ?? 900),
             );
         });
+
+        $di->setShared(
+            'acl',
+            function (): AclMemory {
+                return AclFactory::create();
+            },
+        );
+
+        $di->setShared(
+            'jwtAuthMiddleware',
+            function () use ($di): JwtAuthMiddleware {
+                return new JwtAuthMiddleware(
+                    $di->getShared('jwtService'),
+                    $di->getShared('request'),
+                    $di->getShared('jsonResponder'),
+                    $di->getShared('refreshTokenService'),
+                );
+            },
+        );
+
+        $di->setShared(
+            'authorization',
+            function () use ($di): AuthorizationService {
+                return new AuthorizationService($di->getShared('db'), $di->getShared('acl'));
+            },
+        );
+
+        $di->setShared(
+            'authorizationMiddleware',
+            function () use ($di): AuthorizationMiddleware {
+                return new AuthorizationMiddleware($di->getShared('authorization'), $di->getShared('jsonResponder'));
+            },
+        );
 
         //Router Injection
         $di->setShared('router', function (): Router {
@@ -122,17 +159,9 @@ final class ApplicationFactory
         //Dispatcher Injection
         $di->setShared('dispatcher', function () use ($di): Dispatcher {
             $dispatcher = new Dispatcher();
-
             $eventsManager = new EventsManager();
-
-            $eventsManager->attach(
-                'dispatch:beforeExecuteRoute',
-                new JwtAuthMiddleware(
-                    $di->getShared('jwtService'),
-                    $di->getShared('request'),
-                    $di->getShared('response')
-                )
-            );
+            $eventsManager->attach('dispatch:beforeExecuteRoute', $di->getShared('jwtAuthMiddleware'));
+            $eventsManager->attach('dispatch:beforeExecuteRoute', $di->getShared('authorizationMiddleware'));
 
             $dispatcher->setEventsManager($eventsManager);
 

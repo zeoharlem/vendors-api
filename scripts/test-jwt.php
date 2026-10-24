@@ -22,7 +22,7 @@ try {
 
     // Simulate a user who has successfully logged in.
     // Simulate a user who has successfully logged in.
-    $token = $jwtService->issueAccessToken('test-user-123');
+    $token = $jwtService->issueAccessToken('test-user-123','test-family-456');
 
     echo "PASS: Token issued.\n";
 

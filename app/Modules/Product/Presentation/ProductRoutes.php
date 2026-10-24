@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace App\Modules\Catalog\Presentation;
+namespace App\Modules\Product\Presentation;
 
 use Phalcon\Mvc\Router\Group;
 
-final class CatalogRoutes
+final class ProductRoutes
 {
     public static function register(Group $api): void
     {
-        $namespace = 'App\\Modules\\Catalog\\Presentation';
+        $namespace = 'App\\Modules\\Product\\Presentation';
 
         $api->addGet('/health', [
             'namespace' => $namespace,

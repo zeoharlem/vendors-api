@@ -69,8 +69,12 @@ final class LoginUserService
             throw new RuntimeException('Unable to authenticate this account.',);
         }
 
-        $accessToken = $this->jwtService->issueAccessToken($userId);
-        $refreshToken = $this->refreshTokenService->issue($userId);
+        $session = $this->refreshTokenService->issue($userId);
+        
+        $refreshToken = $session['refresh_token'];
+        $familyId = $session['family_id'];
+
+        $accessToken = $this->jwtService->issueAccessToken($userId, $familyId);
 
         return [
             'access_token' => $accessToken,
