@@ -50,7 +50,7 @@ final class AclFactory
         'users' => ['view', 'manage'],
         'roles' => ['view', 'manage'],
         'permissions' => ['view', 'manage'],
-        'vendors' => ['view', 'profile.manage', 'verify'],
+        'vendors' => ['view', 'profile.manage', 'verify', 'apply'],
         'stores' => ['view', 'manage'],
         'products' => ['view', 'create', 'update', 'delete'],
         'orders' => [
@@ -104,6 +104,7 @@ final class AclFactory
             'products' => ['view'],
             'stores' => ['view'],
             'orders' => ['create', 'view_own', 'cancel_own'],
+            'vendors' => ['apply', 'view'],
         ],
 
         'vendor' => [

@@ -8,6 +8,9 @@ use App\Bootstrap\Routes\ApiRoutes;
 use App\Modules\Auth\Application\Services\LoginUserService;
 use App\Modules\Auth\Application\Services\RefreshTokenService;
 use App\Modules\Auth\Application\Services\RegisterUserService;
+use App\Modules\Vendor\Application\Services\VendorProfileService;
+use App\Modules\Vendor\Domain\Repository\VendorRepository;
+use App\Modules\Vendor\Infrastructure\Persistence\PdoVendorRepository;
 use App\Shared\Http\JsonResponder;
 use App\Shared\Security\AclFactory;
 use App\Shared\Security\AuthorizationMiddleware;
@@ -154,6 +157,19 @@ final class ApplicationFactory
                 $di->getShared('jwtService'),
                 $di->getShared('refreshTokenService')
             ),
+        );
+
+        /**
+         * Vendor Repository
+         */
+        $di->setShared(
+            'vendorRepository',
+            fn (): VendorRepository => new PdoVendorRepository($di->getShared('db'))
+        );
+
+        $di->setShared(
+            'vendorProfileService',
+            fn (): VendorProfileService => new VendorProfileService($di->getShared('vendorRepository'))
         );
 
         //Dispatcher Injection

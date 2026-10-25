@@ -3,6 +3,7 @@ namespace App\Bootstrap\Routes;
 
 use App\Modules\Auth\Presentation\AuthRoutes;
 use App\Modules\Product\Presentation\ProductRoutes;
+use App\Modules\Vendor\Presentation\VendorRoutes;
 use Phalcon\Mvc\Router;
 use Phalcon\Mvc\Router\Group;
 
@@ -15,6 +16,7 @@ final class ApiRoutes {
 
         AuthRoutes::register($api);
         ProductRoutes::register($api);
+        VendorRoutes::register($api);
 
         $router->mount($api);
     }
