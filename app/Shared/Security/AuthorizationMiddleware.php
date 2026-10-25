@@ -31,6 +31,11 @@ final class AuthorizationMiddleware
             'delete' => ['products', 'delete'],
         ],
 
+        'vendor' => [
+            'createprofile' => ['vendors', 'apply'],
+            'me' => ['vendors', 'view'],
+        ],
+
         'stores' => [
             'index' => ['stores', 'view'],
             'show' => ['stores', 'view'],

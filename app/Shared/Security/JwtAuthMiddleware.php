@@ -76,7 +76,11 @@ final class JwtAuthMiddleware
 
     private function unauthorized(Dispatcher $dispatcher): bool
     {
-        $response = $this->jsonResponder->error('UNAUTHORIZED', 'Authentication required or access token is invalid.', 401);
+        $response = $this->jsonResponder->error(
+            'UNAUTHORIZED',
+            'Authentication required or access token is invalid.',
+            401
+        );
         $dispatcher->setReturnedValue($response);
         return false;
     }
