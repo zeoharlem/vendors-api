@@ -34,6 +34,7 @@ final class AuthorizationMiddleware
         'vendor' => [
             'createprofile' => ['vendors', 'apply'],
             'me' => ['vendors', 'view'],
+            'updateprofile' => ['vendors', 'profile.manage'],
         ],
 
         'stores' => [

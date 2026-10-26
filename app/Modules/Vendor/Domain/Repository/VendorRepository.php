@@ -13,4 +13,10 @@ interface VendorRepository
         string $businessName,
         ?string $businessRegistrationNumber,
     ): array;
+
+    public function updateForUser(
+        string $userId,
+        string $businessName,
+        ?string $businessRegistrationNumber
+    ): ?array;
 }

@@ -56,4 +56,49 @@ final class VendorProfileService
     {
         return $this->vendorRepository->findByUserId($userId);
     }
+
+    public function updateForUser(
+        string $userId,
+        string $businessName,
+        ?string $businessRegistrationNumber
+    ): ?array {
+        $businessName = trim($businessName);
+
+        if ($businessName === '') {
+            throw new InvalidArgumentException(
+                'Business name is required.'
+            );
+        }
+
+        if (mb_strlen($businessName) > 255) {
+            throw new InvalidArgumentException(
+                'Business name must not exceed 255 characters.'
+            );
+        }
+
+        if (
+            $businessRegistrationNumber !== null
+            && mb_strlen(trim($businessRegistrationNumber)) > 255
+        ) {
+            throw new InvalidArgumentException(
+                'Business registration number must not exceed 255 characters.'
+            );
+        }
+
+        $existingProfile = $this->vendorRepository->findByUserId($userId);
+
+        if ($existingProfile === null) {
+            return null;
+        }
+
+        $registrationNumber = $businessRegistrationNumber !== null
+            ? trim($businessRegistrationNumber)
+            : null;
+
+        return $this->vendorRepository->updateForUser(
+            $userId,
+            $businessName,
+            $registrationNumber === '' ? null : $registrationNumber,
+        );
+    }
 }
