@@ -37,9 +37,10 @@ final class AuthorizationMiddleware
             'updateprofile' => ['vendors', 'profile.manage'],
         ],
 
-        'stores' => [
+        'store' => [
             'index' => ['stores', 'view'],
             'show' => ['stores', 'view'],
+            'mine' => ['stores', 'view'],
             'create' => ['stores', 'manage'],
             'update' => ['stores', 'manage'],
             'delete' => ['stores', 'manage'],

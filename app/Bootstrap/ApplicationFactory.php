@@ -26,6 +26,9 @@ use App\Shared\Security\JwtService;
 use Phalcon\Events\Manager as EventsManager;
 use Phalcon\Mvc\Dispatcher;
 use Phalcon\Mvc\Model\Transaction\Manager;
+use App\Modules\Store\Application\Services\StoreService;
+use App\Modules\Store\Domain\Repository\StoreRepository;
+use App\Modules\Store\Infrastructure\Persistence\PdoStoreRepository;
 
 final class ApplicationFactory
 {
@@ -164,13 +167,26 @@ final class ApplicationFactory
          */
         $di->setShared(
             'vendorRepository',
-            fn (): VendorRepository => new PdoVendorRepository($di->getShared('db'))
+            fn(): VendorRepository => new PdoVendorRepository($di->getShared('db'))
         );
 
         $di->setShared(
             'vendorProfileService',
-            fn (): VendorProfileService => new VendorProfileService($di->getShared('vendorRepository'))
+            fn(): VendorProfileService => new VendorProfileService($di->getShared('vendorRepository'))
         );
+
+        // NEW: Store repository
+        $di->setShared('storeRepository', function () use ($di): StoreRepository {
+            return new PdoStoreRepository($di->getShared('db'));
+        });
+
+        // NEW: Store service
+        $di->setShared('storeService', function () use ($di): StoreService {
+            return new StoreService(
+                $di->getShared('storeRepository'),
+                $di->getShared('vendorRepository')
+            );
+        });
 
         //Dispatcher Injection
         $di->setShared('dispatcher', function () use ($di): Dispatcher {
