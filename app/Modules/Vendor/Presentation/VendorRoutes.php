@@ -23,5 +23,11 @@ final class VendorRoutes
             'controller' => 'Vendor',
             'action' => 'me',
         ])->setName('v1.vendors.me');
+
+        $api->addPut('/vendors/profile', [
+            'namespace' => $namespace,
+            'controller' => 'Vendor',
+            'action' => 'updateProfile',
+        ])->setName('v1.vendors.profile.update');
     }
 }

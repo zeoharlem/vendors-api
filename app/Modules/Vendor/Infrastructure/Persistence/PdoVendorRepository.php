@@ -37,6 +37,39 @@ final class PdoVendorRepository implements VendorRepository
 
         return $row === false ? null : $row;
     }
+    
+    public function updateForUser(
+        string $userId,
+        string $businessName,
+        ?string $businessRegistrationNumber,
+    ): ?array {
+        $row = $this->db->fetchOne(
+            <<<'SQL'
+                UPDATE public.vendor_profiles
+                SET
+                    business_name = :businessName,
+                    business_registration_number = :businessRegistrationNumber,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = :userId
+                RETURNING
+                    id,
+                    user_id,
+                    business_name,
+                    business_registration_number,
+                    verification_status,
+                    created_at,
+                    updated_at
+                SQL,
+            Enum::FETCH_ASSOC,
+            [
+                'userId' => $userId,
+                'businessName' => $businessName,
+                'businessRegistrationNumber' => $businessRegistrationNumber,
+            ],
+        );
+
+        return $row === false ? null : $row;
+    }
 
     public function createForUser(
         string $userId,
