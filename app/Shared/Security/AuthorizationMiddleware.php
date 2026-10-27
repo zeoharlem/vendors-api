@@ -53,6 +53,13 @@ final class AuthorizationMiddleware
             'cancel' => ['orders', 'cancel_own'],
             'fulfill' => ['orders', 'update_fulfillment'],
         ],
+
+        'adminstore' => [
+            'pending' => ['store_review', 'view_pending'],
+            'show' => ['store_review', 'view'],
+            'approve' => ['store_review', 'approve'],
+            'reject' => ['store_review', 'reject'],
+        ],
     ];
 
     /**
@@ -155,22 +162,6 @@ final class AuthorizationMiddleware
         $dispatcher->setReturnedValue($response);
         return false;
     }
-
-    // private function respond(Dispatcher $dispatcher, int $statusCode, string $reasonPhrase, string $message, ): bool
-    // {
-    //     $this->response->setStatusCode($statusCode, $reasonPhrase);
-
-    //     $this->response->setJsonContent(
-    //         [
-    //             'success' => false,
-    //             'message' => $message,
-    //         ]
-    //     );
-
-    //     $dispatcher->setReturnedValue($this->response);
-
-    //     return false;
-    // }
 
     
     /**
