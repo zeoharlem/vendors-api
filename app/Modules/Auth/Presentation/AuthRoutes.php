@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Auth\Presentation;
 
-use Phalcon\Mvc\Router;
 use Phalcon\Mvc\Router\Group;
 
 final class AuthRoutes

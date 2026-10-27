@@ -347,4 +347,26 @@ final class PdoStoreRepository implements StoreRepository
 
         return $store === false || $store === [] ? null : $store;
     }
+
+    public function findVendorUserIdByStoreId(string $storeId): ?string
+    {
+        $row = $this->db->fetchOne(
+            <<<'SQL'
+        SELECT vp.user_id
+        FROM public.stores s
+        INNER JOIN public.vendor_profiles vp
+            ON vp.id = s.vendor_profile_id
+        WHERE s.id = :storeId
+        LIMIT 1
+        SQL,
+            Enum::FETCH_ASSOC,
+            ['storeId' => $storeId],
+        );
+
+        if (!is_array($row) || !isset($row['user_id'])) {
+            return null;
+        }
+
+        return (string) $row['user_id'];
+    }
 }

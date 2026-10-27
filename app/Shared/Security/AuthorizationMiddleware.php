@@ -60,6 +60,11 @@ final class AuthorizationMiddleware
             'approve' => ['store_review', 'approve'],
             'reject' => ['store_review', 'reject'],
         ],
+
+        'notification' => [
+            'index' => ['notification', 'view'],
+            'markread' => ['notification', 'mark_read'],
+        ],
     ];
 
     /**

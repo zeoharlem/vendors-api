@@ -8,6 +8,9 @@ use App\Bootstrap\Routes\ApiRoutes;
 use App\Modules\Auth\Application\Services\LoginUserService;
 use App\Modules\Auth\Application\Services\RefreshTokenService;
 use App\Modules\Auth\Application\Services\RegisterUserService;
+use App\Modules\Notification\Application\Services\NotificationService;
+use App\Modules\Notification\Domain\Repository\NotificationRepository;
+use App\Modules\Notification\Infrastructure\Persistence\PdoNotificationRepository;
 use App\Modules\Store\Application\Services\StoreReviewService;
 use App\Modules\Vendor\Application\Services\VendorProfileService;
 use App\Modules\Vendor\Domain\Repository\VendorRepository;
@@ -191,8 +194,27 @@ final class ApplicationFactory
 
         // NEW: Store review service
         $di->setShared('storeReviewService', function () use ($di): StoreReviewService {
-            return new StoreReviewService($di->getShared('storeRepository'));
+            return new StoreReviewService(
+                $di->getShared('storeRepository'),
+                $di->getShared('notificationService')
+            );
         });
+
+        // Notification repository injection
+        $di->setShared(
+            "notificationRepository",
+            function () use ($di): NotificationRepository {
+                return new PdoNotificationRepository($di->getShared('db'));
+            },
+        );
+
+        // The notification service depends on the notification repository.
+        $di->setShared(
+            "notificationService",
+            function () use ($di): NotificationService {
+                return new NotificationService($di->getShared("notificationRepository"));
+            },
+        );
 
         //Dispatcher Injection
         $di->setShared('dispatcher', function () use ($di): Dispatcher {

@@ -59,4 +59,6 @@ interface StoreRepository
      * @return array<string, mixed>|null
      */
     public function findById(string $storeId): ?array;
+
+    public function findVendorUserIdByStoreId(string $storeId,): ?string;
 }
