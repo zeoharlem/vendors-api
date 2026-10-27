@@ -151,49 +151,6 @@ final class VendorController extends Controller
             );
         }
 
-        // if (!is_string($userId) || $userId === '') {
-        //     return $this->jsonResponder->error('UNAUTHORIZED', 'Authentication is required.', 401);
-        // }
-
-        // $body = $this->request->getJsonRawBody(true);
-
-        // if (!is_array($body)) {
-        //     return $this->jsonResponder->error('UNPROCESSABLE_ENTITY', 'A valid JSON request body is required.', 422);
-        // }
-
-        // $businessName = $body['business_name'] ?? null;
-        // $registrationNumber = $body['business_registration_number'] ?? null;
-
-        // if (
-        //     !is_string($businessName)
-        //     || (
-        //         $registrationNumber !== null && !is_string($registrationNumber)
-        //     )
-        // ) {
-        //     return $this->jsonResponder->error('UNPROCESSABLE_ENTITY', 'Invalid business profile fields.', 422);
-        // }
-
-        // try {
-        //     $profile = $this->getDI()
-        //         ->getShared('vendorProfileService')
-        //         ->updateForUser(
-        //             $userId,
-        //             $businessName,
-        //             $registrationNumber,
-        //         );
-
-        //     if ($profile === null) {
-        //         return $this->jsonResponder->error('NOT_FOUND', 'Invalid business profile fields.', 404);
-        //     }
-
-        //     return $this->jsonResponder->success($profile);
-        // } catch (InvalidArgumentException $exception) {
-        //     return $this->jsonResponder->error('UNPROCESSABLE_ENTITY', $exception->getMessage(), 422);
-        // } catch (Throwable $exception) {
-        //     error_log('Vendor profile update failed: ' . $exception->getMessage());
-
-        //     return $this->jsonResponder->error('INTERNAL_SERVER_ERROR', 'Unable to update vendor profile.', 500);
-        // }
-    }//
+    }
 
 }

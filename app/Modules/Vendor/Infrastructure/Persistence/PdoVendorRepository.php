@@ -12,7 +12,8 @@ use Throwable;
 
 final class PdoVendorRepository implements VendorRepository
 {
-    public function __construct(private readonly Adapter $db,) {
+    public function __construct(private readonly Adapter $db, )
+    {
     }
 
     public function findByUserId(string $userId): ?array
@@ -37,7 +38,7 @@ final class PdoVendorRepository implements VendorRepository
 
         return $row === false ? null : $row;
     }
-    
+
     public function updateForUser(
         string $userId,
         string $businessName,
@@ -132,12 +133,173 @@ final class PdoVendorRepository implements VendorRepository
             // against two concurrent profile-creation requests.
             if (
                 (string) $exception->getCode() === '23505'
-                && str_contains($exception->getMessage(),'vendor_profiles_user_id_key')
+                && str_contains($exception->getMessage(), 'vendor_profiles_user_id_key')
             ) {
                 throw new VendorProfileAlreadyExistsException();
             }
 
             throw $exception;
         }
+    }
+
+    public function findPendingForReview(int $limit, int $offset): array
+    {
+        $sql = <<<'SQL'
+        SELECT
+            id,
+            user_id,
+            business_name,
+            business_registration_number,
+            verification_status,
+            reviewed_by,
+            reviewed_at,
+            rejection_reason,
+            created_at,
+            updated_at
+        FROM public.vendor_profiles
+        WHERE verification_status = :status
+        ORDER BY created_at ASC, id ASC
+        LIMIT :limit OFFSET :offset
+    SQL;
+
+        return $this->db->fetchAll(
+            $sql,
+            Enum::FETCH_ASSOC,
+            [
+                'status' => 'pending',
+                'limit' => $limit,
+                'offset' => $offset,
+            ]
+        );
+    }
+
+    public function findById(string $vendorProfileId): ?array
+    {
+        $sql = <<<'SQL'
+        SELECT
+            id,
+            user_id,
+            business_name,
+            business_registration_number,
+            verification_status,
+            reviewed_by,
+            reviewed_at,
+            rejection_reason,
+            created_at,
+            updated_at
+        FROM public.vendor_profiles
+        WHERE id = :id
+        LIMIT 1
+    SQL;
+
+        $row = $this->db->fetchOne(
+            $sql,
+            Enum::FETCH_ASSOC,
+            ['id' => $vendorProfileId]
+        );
+
+        return $row ?: null;
+    }
+
+    public function approvePending(
+        string $vendorProfileId,
+        string $reviewerId
+    ): ?array {
+        $sql = <<<'SQL'
+        UPDATE public.vendor_profiles
+        SET
+            verification_status = :status,
+            reviewed_by = :reviewer_id,
+            reviewed_at = NOW(),
+            rejection_reason = NULL,
+            updated_at = NOW()
+        WHERE id = :id
+          AND verification_status = :pending_status
+        RETURNING
+            id,
+            user_id,
+            business_name,
+            business_registration_number,
+            verification_status,
+            reviewed_by,
+            reviewed_at,
+            rejection_reason,
+            created_at,
+            updated_at
+    SQL;
+
+        $row = $this->db->fetchOne(
+            $sql,
+            Enum::FETCH_ASSOC,
+            [
+                'status' => 'verified',
+                'reviewer_id' => $reviewerId,
+                'id' => $vendorProfileId,
+                'pending_status' => 'pending',
+            ]
+        );
+
+        return $row ?: null;
+    }
+
+    public function rejectPending(
+        string $vendorProfileId,
+        string $reviewerId,
+        string $reason
+    ): ?array {
+        $sql = <<<'SQL'
+        UPDATE public.vendor_profiles
+        SET
+            verification_status = :status,
+            reviewed_by = :reviewer_id,
+            reviewed_at = NOW(),
+            rejection_reason = :reason,
+            updated_at = NOW()
+        WHERE id = :id
+          AND verification_status = :pending_status
+        RETURNING
+            id,
+            user_id,
+            business_name,
+            business_registration_number,
+            verification_status,
+            reviewed_by,
+            reviewed_at,
+            rejection_reason,
+            created_at,
+            updated_at
+    SQL;
+
+        $row = $this->db->fetchOne(
+            $sql,
+            Enum::FETCH_ASSOC,
+            [
+                'status' => 'rejected',
+                'reviewer_id' => $reviewerId,
+                'reason' => $reason,
+                'id' => $vendorProfileId,
+                'pending_status' => 'pending',
+            ]
+        );
+
+        return $row ?: null;
+    }
+
+    public function findUserIdByProfileId(string $vendorProfileId): ?string
+    {
+        $sql = <<<'SQL'
+        SELECT user_id
+        FROM public.vendor_profiles
+        WHERE id = :id
+        LIMIT 1
+    SQL;
+
+        $row = $this->db->fetchOne(
+            $sql,
+            Enum::FETCH_ASSOC,
+            ['id' => $vendorProfileId]
+        );
+
+        return isset($row['user_id']) ? (string) $row['user_id'] : null;
     }
 }

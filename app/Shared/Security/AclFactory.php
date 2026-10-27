@@ -58,6 +58,13 @@ final class AclFactory
             'approve',
             'reject',
         ],
+        'vendor_review' => [
+            'view_pending',
+            'view',
+            'approve',
+            'reject',
+        ],
+        'notification' => ['view','mark_read'],
         'products' => ['view', 'create', 'update', 'delete'],
         'orders' => [
             'create',
@@ -111,6 +118,7 @@ final class AclFactory
             'stores' => ['view'],
             'orders' => ['create', 'view_own', 'cancel_own'],
             'vendors' => ['apply', 'view'],
+            'notification' => ['view', 'mark_read'],
         ],
 
         'vendor' => [
@@ -118,6 +126,7 @@ final class AclFactory
             'stores' => ['view', 'manage'],
             'products' => ['view', 'create', 'update', 'delete'],
             'orders' => ['view_own', 'update_fulfillment'],
+            'notification' => ['view', 'mark_read'],
         ],
 
         'support' => [
