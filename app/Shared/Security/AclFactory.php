@@ -52,6 +52,12 @@ final class AclFactory
         'permissions' => ['view', 'manage'],
         'vendors' => ['view', 'profile.manage', 'verify', 'apply'],
         'stores' => ['view', 'manage'],
+        'store_review' => [
+            'view_pending',
+            'view',
+            'approve',
+            'reject',
+        ],
         'products' => ['view', 'create', 'update', 'delete'],
         'orders' => [
             'create',

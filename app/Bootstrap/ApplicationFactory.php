@@ -8,6 +8,7 @@ use App\Bootstrap\Routes\ApiRoutes;
 use App\Modules\Auth\Application\Services\LoginUserService;
 use App\Modules\Auth\Application\Services\RefreshTokenService;
 use App\Modules\Auth\Application\Services\RegisterUserService;
+use App\Modules\Store\Application\Services\StoreReviewService;
 use App\Modules\Vendor\Application\Services\VendorProfileService;
 use App\Modules\Vendor\Domain\Repository\VendorRepository;
 use App\Modules\Vendor\Infrastructure\Persistence\PdoVendorRepository;
@@ -186,6 +187,11 @@ final class ApplicationFactory
                 $di->getShared('storeRepository'),
                 $di->getShared('vendorRepository')
             );
+        });
+
+        // NEW: Store review service
+        $di->setShared('storeReviewService', function () use ($di): StoreReviewService {
+            return new StoreReviewService($di->getShared('storeRepository'));
         });
 
         //Dispatcher Injection

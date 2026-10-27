@@ -24,4 +24,39 @@ interface StoreRepository
     public function findByVendorProfileId(
         string $vendorProfileId,
     ): array;
+
+    /**
+     * List stores awaiting administrator review.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function findPending(int $limit, int $offset): array;
+
+    /**
+     * Approve a store only if its current status is pending.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function approvePending(
+        string $storeId,
+        string $adminUserId,
+    ): ?array;
+
+    /**
+     * Reject a store only if its current status is pending.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function rejectPending(
+        string $storeId,
+        string $adminUserId,
+        string $reason,
+    ): ?array;
+
+    /**
+     * Find a store by ID for administrator review.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function findById(string $storeId): ?array;
 }

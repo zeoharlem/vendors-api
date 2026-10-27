@@ -12,7 +12,8 @@ final class PdoStoreRepository implements StoreRepository
 {
     public function __construct(
         private readonly AdapterInterface $db,
-    ) {}
+    ) {
+    }
 
     public function createForVendor(
         string $vendorProfileId,
@@ -150,7 +151,7 @@ final class PdoStoreRepository implements StoreRepository
             $offset,
         );
 
-        return $this->db->fetchAll($sql,Enum::FETCH_ASSOC);
+        return $this->db->fetchAll($sql, Enum::FETCH_ASSOC);
     }
 
     public function findByVendorProfileId(
@@ -174,5 +175,176 @@ final class PdoStoreRepository implements StoreRepository
             Enum::FETCH_ASSOC,
             ['vendorProfileId' => $vendorProfileId],
         );
+    }
+
+    /**
+     * List stores waiting for administrator review.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function findPending(int $limit, int $offset): array
+    {
+        $limit = max(1, min($limit, 100));
+        $offset = max(0, $offset);
+
+        $sql = <<<'SQL'
+        SELECT
+            id,
+            vendor_profile_id,
+            name,
+            slug,
+            description,
+            status,
+            created_at,
+            updated_at,
+            reviewed_by,
+            reviewed_at,
+            rejection_reason
+        FROM public.stores
+        WHERE status = :status
+        ORDER BY created_at ASC, id ASC
+        LIMIT :limit
+        OFFSET :offset
+        SQL;
+
+        return $this->db->fetchAll(
+            $sql,
+            Enum::FETCH_ASSOC,
+            [
+                'status' => 'pending',
+                'limit' => $limit,
+                'offset' => $offset,
+            ],
+        );
+    }
+
+    /**
+     * Find any store, regardless of status.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function findById(string $storeId): ?array
+    {
+        $sql = <<<'SQL'
+        SELECT
+            id,
+            vendor_profile_id,
+            name,
+            slug,
+            description,
+            status,
+            created_at,
+            updated_at,
+            reviewed_by,
+            reviewed_at,
+            rejection_reason
+        FROM public.stores
+        WHERE id = :id
+        LIMIT 1
+        SQL;
+
+        $store = $this->db->fetchOne(
+            $sql,
+            Enum::FETCH_ASSOC,
+            ['id' => $storeId],
+        );
+
+        return $store === false || $store === [] ? null : $store;
+    }
+
+    /**
+     * Approve a store only when it is still pending.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function approvePending(
+        string $storeId,
+        string $adminUserId,
+    ): ?array {
+        $sql = <<<'SQL'
+        UPDATE public.stores
+        SET
+            status = :approvedStatus,
+            reviewed_by = :adminUserId,
+            reviewed_at = NOW(),
+            rejection_reason = NULL,
+            updated_at = NOW()
+        WHERE id = :id
+          AND status = :pendingStatus
+        RETURNING
+            id,
+            vendor_profile_id,
+            name,
+            slug,
+            description,
+            status,
+            created_at,
+            updated_at,
+            reviewed_by,
+            reviewed_at,
+            rejection_reason
+        SQL;
+
+        $store = $this->db->fetchOne(
+            $sql,
+            Enum::FETCH_ASSOC,
+            [
+                'approvedStatus' => 'active',
+                'adminUserId' => $adminUserId,
+                'id' => $storeId,
+                'pendingStatus' => 'pending',
+            ],
+        );
+
+        return $store === false || $store === [] ? null : $store;
+    }
+
+    /**
+     * Reject a store only when it is still pending.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function rejectPending(
+        string $storeId,
+        string $adminUserId,
+        string $reason,
+    ): ?array {
+        $sql = <<<'SQL'
+        UPDATE public.stores
+        SET
+            status = :rejectedStatus,
+            reviewed_by = :adminUserId,
+            reviewed_at = NOW(),
+            rejection_reason = :reason,
+            updated_at = NOW()
+        WHERE id = :id
+          AND status = :pendingStatus
+        RETURNING
+            id,
+            vendor_profile_id,
+            name,
+            slug,
+            description,
+            status,
+            created_at,
+            updated_at,
+            reviewed_by,
+            reviewed_at,
+            rejection_reason
+        SQL;
+
+        $store = $this->db->fetchOne(
+            $sql,
+            Enum::FETCH_ASSOC,
+            [
+                'rejectedStatus' => 'rejected',
+                'adminUserId' => $adminUserId,
+                'reason' => $reason,
+                'id' => $storeId,
+                'pendingStatus' => 'pending',
+            ],
+        );
+
+        return $store === false || $store === [] ? null : $store;
     }
 }
