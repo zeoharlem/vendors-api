@@ -58,6 +58,12 @@ final class AclFactory
             'approve',
             'reject',
         ],
+        'vendor_review' => [
+            'view_pending',
+            'view',
+            'approve',
+            'reject',
+        ],
         'notification' => ['view','mark_read'],
         'products' => ['view', 'create', 'update', 'delete'],
         'orders' => [

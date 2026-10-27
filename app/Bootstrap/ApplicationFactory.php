@@ -33,6 +33,8 @@ use Phalcon\Mvc\Model\Transaction\Manager;
 use App\Modules\Store\Application\Services\StoreService;
 use App\Modules\Store\Domain\Repository\StoreRepository;
 use App\Modules\Store\Infrastructure\Persistence\PdoStoreRepository;
+use App\Modules\Vendor\Application\Services\VendorReviewService;
+use App\Modules\Vendor\Presentation\Validators\RejectVendorValidator;
 
 final class ApplicationFactory
 {
@@ -214,6 +216,19 @@ final class ApplicationFactory
             function () use ($di): NotificationService {
                 return new NotificationService($di->getShared("notificationRepository"));
             },
+        );
+
+        $di->setShared('vendorReviewService', function () use ($di) {
+                return new VendorReviewService(
+                    $di->getShared('vendorRepository'),
+                    $di->getShared('notificationService'),
+                );
+            }
+        );
+
+        $di->setShared('rejectVendorValidator', function () use ($di) {
+                return new RejectVendorValidator();
+            }
         );
 
         //Dispatcher Injection

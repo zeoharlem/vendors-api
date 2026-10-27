@@ -86,4 +86,51 @@ final readonly class NotificationService
             ),
         );
     }
+
+    public function notifyVendorApproved(
+        string $userId,
+        string $vendorProfileId,
+        string $businessName,
+    ): void {
+        $this->repository->create(
+            new CreateNotificationDto(
+                userId: $userId,
+                type: 'vendor.approved',
+                title: 'Your vendor profile has been approved',
+                message: sprintf(
+                    'Your vendor profile "%s" has been approved.',
+                    $businessName,
+                ),
+                data: [
+                    'vendor_profile_id' => $vendorProfileId,
+                    'verification_status' => 'approved',
+                ],
+            ),
+        );
+    }
+
+    public function notifyVendorRejected(
+        string $userId,
+        string $vendorProfileId,
+        string $businessName,
+        string $reason,
+    ): void {
+        $this->repository->create(
+            new CreateNotificationDto(
+                userId: $userId,
+                type: 'vendor.rejected',
+                title: 'Your vendor profile needs attention',
+                message: sprintf(
+                    'Your vendor profile "%s" was rejected. Reason: %s',
+                    $businessName,
+                    $reason,
+                ),
+                data: [
+                    'vendor_profile_id' => $vendorProfileId,
+                    'verification_status' => 'rejected',
+                    'rejection_reason' => $reason,
+                ],
+            ),
+        );
+    }
 }

@@ -65,6 +65,13 @@ final class AuthorizationMiddleware
             'index' => ['notification', 'view'],
             'markread' => ['notification', 'mark_read'],
         ],
+
+        'adminvendor' => [
+            'pending' => ['vendor_review', 'view_pending'],
+            'show' => ['vendor_review', 'view'],
+            'approve' => ['vendor_review', 'approve'],
+            'reject' => ['vendor_review', 'reject'],
+        ],
     ];
 
     /**
