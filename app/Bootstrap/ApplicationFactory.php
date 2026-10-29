@@ -5,12 +5,23 @@ declare(strict_types=1);
 namespace App\Bootstrap;
 
 use App\Bootstrap\Routes\ApiRoutes;
+use App\Modules\Product\Application\Services\ProductService;
+use App\Modules\Product\Domain\Repositories\ProductCategoryRepository;
+use App\Modules\Product\Domain\Repositories\ProductVariantRepository;
+use App\Modules\Product\Domain\Repositories\InventoryRepository;
+use App\Modules\Product\Domain\Repositories\InventoryMovementRepository;
+use App\Modules\Product\Infrastructure\Persistence\PdoProductCategoryRepository;
+use App\Modules\Product\Infrastructure\Persistence\PdoProductVariantRepository;
+use App\Modules\Product\Infrastructure\Persistence\PdoInventoryRepository;
+use App\Modules\Product\Infrastructure\Persistence\PdoInventoryMovementRepository;
 use App\Modules\Auth\Application\Services\LoginUserService;
 use App\Modules\Auth\Application\Services\RefreshTokenService;
 use App\Modules\Auth\Application\Services\RegisterUserService;
 use App\Modules\Notification\Application\Services\NotificationService;
 use App\Modules\Notification\Domain\Repository\NotificationRepository;
 use App\Modules\Notification\Infrastructure\Persistence\PdoNotificationRepository;
+use App\Modules\Product\Infrastructure\Persistence\PdoProductRepository;
+use App\Modules\Product\Infrastructure\Persistence\PdoStoreAccessChecker;
 use App\Modules\Store\Application\Services\StoreReviewService;
 use App\Modules\Vendor\Application\Services\VendorProfileService;
 use App\Modules\Vendor\Domain\Repository\VendorRepository;
@@ -35,6 +46,9 @@ use App\Modules\Store\Domain\Repository\StoreRepository;
 use App\Modules\Store\Infrastructure\Persistence\PdoStoreRepository;
 use App\Modules\Vendor\Application\Services\VendorReviewService;
 use App\Modules\Vendor\Presentation\Validators\RejectVendorValidator;
+use App\Modules\Product\Application\Services\CategoryService;
+use App\Modules\Product\Domain\Repositories\CategoryRepository;
+use App\Modules\Product\Infrastructure\Persistence\PdoCategoryRepository;
 
 final class ApplicationFactory
 {
@@ -229,6 +243,59 @@ final class ApplicationFactory
         $di->setShared('rejectVendorValidator', function () use ($di) {
                 return new RejectVendorValidator();
             }
+        );
+
+        $di->setShared(
+            'productRepository',
+            fn() => new PdoProductRepository($di->getShared('db'))
+        );
+
+        $di->setShared(
+            'storeAccessChecker',
+            fn() => new PdoStoreAccessChecker($di->getShared('db'))
+        );
+
+        $di->setShared(
+            'productService',
+            fn(): ProductService => new ProductService(
+                $di->getShared('productRepository'),
+                $di->getShared('storeAccessChecker'),
+                $di->getShared('productVariantRepository'),
+                $di->getShared('inventoryRepository'),
+                $di->getShared('inventoryMovementRepository'),
+                $di->getShared('productCategoryRepository'),
+                $di->getShared('db'),
+            )
+        );
+
+        $di->setShared(
+            'productVariantRepository',
+            fn(): ProductVariantRepository => new PdoProductVariantRepository($di->getShared('db'))
+        );
+
+        $di->setShared(
+            'inventoryRepository',
+            fn(): InventoryRepository => new PdoInventoryRepository($di->getShared('db'))
+        );
+
+        $di->setShared(
+            'inventoryMovementRepository',
+            fn(): InventoryMovementRepository => new PdoInventoryMovementRepository($di->getShared('db'))
+        );
+
+        $di->setShared(
+            'productCategoryRepository',
+            fn(): ProductCategoryRepository => new PdoProductCategoryRepository($di->getShared('db'))
+        );
+
+        $di->setShared(
+            'categoryRepository',
+            fn(): CategoryRepository => new PdoCategoryRepository($di->getShared('db'))
+        );
+
+        $di->setShared(
+            'categoryService',
+            fn(): CategoryService => new CategoryService($di->getShared('categoryRepository'))
         );
 
         //Dispatcher Injection

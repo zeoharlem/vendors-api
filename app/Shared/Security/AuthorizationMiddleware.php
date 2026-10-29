@@ -26,9 +26,10 @@ final class AuthorizationMiddleware
         'product' => [
             'index' => ['products', 'view'],
             'show' => ['products', 'view'],
+            'manageShow' => ['products', 'view'],
             'create' => ['products', 'create'],
             'update' => ['products', 'update'],
-            'delete' => ['products', 'delete'],
+            'archive' => ['products', 'delete'],
         ],
 
         'vendor' => [
@@ -71,6 +72,19 @@ final class AuthorizationMiddleware
             'show' => ['vendor_review', 'view'],
             'approve' => ['vendor_review', 'approve'],
             'reject' => ['vendor_review', 'reject'],
+        ],
+
+        'admincategory' => [
+            'index' => ['category', 'view'],
+            'show' => ['category', 'view'],
+            'create' => ['category', 'create'],
+            'update' => ['category', 'update'],
+            'activate' => ['category', 'manage_status'],
+            'deactivate' => ['category', 'manage_status'],
+        ],
+
+        'vendorproduct' => [
+            'create' => ['products', 'create'],
         ],
     ];
 

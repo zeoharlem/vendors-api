@@ -18,16 +18,40 @@ final class ProductRoutes
             'action' => 'index',
         ])->setName('v1.health');
 
-        $api->addGet('/products', [
+        $api->addPost('/products', [
             'namespace' => $namespace,
             'controller' => 'Product',
-            'action' => 'index',
-        ])->setName('v1.products.index');
+            'action' => 'create',
+        ]);
 
-        $api->addGet('/products/{id:[0-9a-fA-F-]+}', [
+        $api->addGet('/products/{id}', [
             'namespace' => $namespace,
             'controller' => 'Product',
             'action' => 'show',
-        ])->setName('v1.products.show');
+        ]);
+
+        $api->addPut('/products/{id}', [
+            'namespace' => $namespace,
+            'controller' => 'Product',
+            'action' => 'update',
+        ]);
+
+        $api->addPatch('/products/{id}', [
+            'namespace' => $namespace,
+            'controller' => 'Product',
+            'action' => 'update',
+        ]);
+
+        $api->addDelete('/products/{id}', [
+            'namespace' => $namespace,
+            'controller' => 'Product',
+            'action' => 'archive',
+        ]);
+
+        $api->addGet('/vendor/products/{id}', [
+            'namespace' => $namespace,
+            'controller' => 'Product',
+            'action' => 'manageShow',
+        ]);
     }
 }
