@@ -66,6 +66,12 @@ final class AclFactory
         ],
         'notification' => ['view','mark_read'],
         'products' => ['view', 'create', 'update', 'delete'],
+        'category' => [
+            'view',
+            'create',
+            'update',
+            'manage_status',
+        ],
         'orders' => [
             'create',
             'view',
@@ -136,6 +142,7 @@ final class AclFactory
             'products' => ['view'],
             'orders' => ['view', 'update'],
         ],
+        
     ];
 
     private const array ROLES = ['customer', 'vendor', 'support', 'admin'];

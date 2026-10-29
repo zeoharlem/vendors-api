@@ -9,6 +9,9 @@ use App\Modules\Vendor\Presentation\AdminVendorRoutes;
 use App\Modules\Vendor\Presentation\VendorRoutes;
 use Phalcon\Mvc\Router;
 use Phalcon\Mvc\Router\Group;
+use App\Modules\Product\Presentation\CategoryRoutes;
+use App\Modules\Product\Presentation\AdminCategoryRoutes;
+use App\Modules\Product\Presentation\VendorProductRoutes;
 
 final class ApiRoutes {
     
@@ -23,6 +26,9 @@ final class ApiRoutes {
         StoreRoutes::register($api);
         NotificationRoutes::register($api);
         AdminVendorRoutes::register($api);
+        CategoryRoutes::register($api);
+        AdminCategoryRoutes::register($api);
+        VendorProductRoutes::register($api);
 
         $router->mount($api);
     }
