@@ -13,6 +13,7 @@ use App\Modules\Product\Presentation\CategoryRoutes;
 use App\Modules\Product\Presentation\AdminCategoryRoutes;
 use App\Modules\Product\Presentation\VendorProductRoutes;
 use App\Modules\Cart\Presentation\Routes\CartRoutes;
+use App\Modules\Order\Presentation\Routes\OrderRoute;
 
 final class ApiRoutes {
     
@@ -31,6 +32,7 @@ final class ApiRoutes {
         AdminCategoryRoutes::register($api);
         VendorProductRoutes::register($api);
         CartRoutes::register($api);
+        OrderRoute::register($api);
 
         $router->mount($api);
     }

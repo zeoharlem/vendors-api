@@ -93,6 +93,11 @@ final class AuthorizationMiddleware
         'vendorproduct' => [
             'create' => ['products', 'create'],
         ],
+
+        'order' => [
+            'checkout' => ['orders', 'create'],
+            'show' => ['orders', 'view_own'],
+        ],
     ];
 
     /**

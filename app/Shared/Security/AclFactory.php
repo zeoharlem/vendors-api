@@ -123,7 +123,7 @@ final class AclFactory
         'customer' => [
             'products' => ['view'],
             'stores' => ['view'],
-            'orders' => ['create', 'view_own', 'cancel_own'],
+            'orders' => ['create', 'view', 'view_own', 'cancel_own'],
             'vendors' => ['apply', 'view'],
             'notification' => ['view', 'mark_read'],
             'cart' => ['view', 'manage'],
