@@ -60,4 +60,16 @@ interface PaymentRepository
         string $customerId,
         string $reference
     ): ?array;
+
+    public function confirmSuccessfulPayment(
+        string $reference,
+        string $providerTransactionId,
+        array $providerResponse
+    ): array;
+
+    public function markPaymentFailed(
+        string $reference,
+        string $failureReason,
+        array $providerResponse = []
+    ): void;
 }

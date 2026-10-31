@@ -167,7 +167,12 @@ final class AuthorizationMiddleware
                 'refresh',
                 'logout',
             ],
-            'health' => ['index'],
+            'health' => [
+                'index',
+            ],
+            'paymentwebhook' => [
+                'paystack',
+            ],
         ];
 
         return in_array($action, $publicRoutes[$controller] ?? [], true );

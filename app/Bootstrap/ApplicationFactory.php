@@ -60,6 +60,8 @@ use App\Modules\Payment\Domain\Repositories\PaymentRepository;
 use App\Modules\Payment\Infrastructure\Persistence\PdoPaymentRepository;
 use App\Modules\Payment\Infrastructure\Providers\PaystackPaymentProvider;
 use App\Modules\Payment\Application\Services\PaymentService;
+use App\Modules\Payment\Infrastructure\Persistence\PdoPaymentEventRepository;
+use App\Modules\Payment\Infrastructure\Providers\PaystackWebhookSignatureVerifier;
 
 final class ApplicationFactory
 {
@@ -345,6 +347,21 @@ final class ApplicationFactory
                 callbackUrl: $callbackUrl
             );
         });
+
+        $di->setShared(
+            'paymentEventRepository',
+            function () use ($di) {
+                return new PdoPaymentEventRepository($di->getShared('db'));
+            }
+        );
+
+        $di->setShared(
+            'paystackWebhookSignatureVerifier',
+            function () {
+                $secretKey = getenv('PAYSTACK_SECRET_KEY') ?: ($_ENV['PAYSTACK_SECRET_KEY'] ?? '');
+                return new PaystackWebhookSignatureVerifier((string) $secretKey);
+            }
+        );
 
         //Dispatcher Injection
         $di->setShared('dispatcher', function () use ($di): Dispatcher {
