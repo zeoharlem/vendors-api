@@ -52,6 +52,9 @@ use App\Modules\Product\Infrastructure\Persistence\PdoCategoryRepository;
 use App\Modules\Cart\Application\Services\CartService;
 use App\Modules\Cart\Domain\Repositories\CartRepository;
 use App\Modules\Cart\Infrastructure\Persistence\PdoCartRepository;
+use App\Modules\Order\Domain\Repositories\OrderRepository;
+use App\Modules\Order\Infrastructure\Persistence\PdoOrderRepository;
+use App\Modules\Order\Application\Services\CheckoutService;
 
 final class ApplicationFactory
 {
@@ -309,6 +312,14 @@ final class ApplicationFactory
             return new CartService(
                 $di->getShared('cartRepository')
             );
+        });
+
+        $di->setShared('orderRepository', function () use ($di): OrderRepository {
+            return new PdoOrderRepository($di->getShared('db'));
+        });
+
+        $di->setShared('checkoutService', function () use ($di): CheckoutService {
+            return new CheckoutService($di->getShared('orderRepository'));
         });
 
         //Dispatcher Injection
