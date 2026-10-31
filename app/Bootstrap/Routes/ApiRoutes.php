@@ -12,6 +12,7 @@ use Phalcon\Mvc\Router\Group;
 use App\Modules\Product\Presentation\CategoryRoutes;
 use App\Modules\Product\Presentation\AdminCategoryRoutes;
 use App\Modules\Product\Presentation\VendorProductRoutes;
+use App\Modules\Cart\Presentation\Routes\CartRoutes;
 
 final class ApiRoutes {
     
@@ -29,6 +30,7 @@ final class ApiRoutes {
         CategoryRoutes::register($api);
         AdminCategoryRoutes::register($api);
         VendorProductRoutes::register($api);
+        CartRoutes::register($api);
 
         $router->mount($api);
     }

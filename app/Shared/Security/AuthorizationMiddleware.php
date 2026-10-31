@@ -67,6 +67,13 @@ final class AuthorizationMiddleware
             'markread' => ['notification', 'mark_read'],
         ],
 
+        'cart' => [
+            'index' => ['cart', 'view'],
+            'additem' => ['cart', 'manage'],
+            'updateitem' => ['cart', 'manage'],
+            'removeitem' => ['cart', 'manage'],
+        ],
+
         'adminvendor' => [
             'pending' => ['vendor_review', 'view_pending'],
             'show' => ['vendor_review', 'view'],
