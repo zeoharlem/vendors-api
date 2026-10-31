@@ -98,6 +98,11 @@ final class AuthorizationMiddleware
             'checkout' => ['orders', 'create'],
             'show' => ['orders', 'view_own'],
         ],
+
+        'payment' => [
+            'initialize' => ['payments', 'initialize'],
+            'show' => ['payments', 'view_own'],
+        ],
     ];
 
     /**

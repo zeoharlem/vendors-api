@@ -73,6 +73,10 @@ final class AclFactory
             'update',
             'manage_status',
         ],
+        'payments' => [
+            'initialize',
+            'view_own',
+        ],
         'orders' => [
             'create',
             'view',
@@ -127,6 +131,7 @@ final class AclFactory
             'vendors' => ['apply', 'view'],
             'notification' => ['view', 'mark_read'],
             'cart' => ['view', 'manage'],
+            'payments' => ['initialize', 'view_own'],
         ],
 
         'vendor' => [

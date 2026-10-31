@@ -3,6 +3,7 @@ namespace App\Bootstrap\Routes;
 
 use App\Modules\Auth\Presentation\AuthRoutes;
 use App\Modules\Notification\Presentation\NotificationRoutes;
+use App\Modules\Payment\Presentation\Routes\PaymentRoutes;
 use App\Modules\Product\Presentation\ProductRoutes;
 use App\Modules\Store\Presentation\StoreRoutes;
 use App\Modules\Vendor\Presentation\AdminVendorRoutes;
@@ -33,6 +34,7 @@ final class ApiRoutes {
         VendorProductRoutes::register($api);
         CartRoutes::register($api);
         OrderRoute::register($api);
+        PaymentRoutes::register($api);
 
         $router->mount($api);
     }
