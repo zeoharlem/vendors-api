@@ -55,6 +55,11 @@ use App\Modules\Cart\Infrastructure\Persistence\PdoCartRepository;
 use App\Modules\Order\Domain\Repositories\OrderRepository;
 use App\Modules\Order\Infrastructure\Persistence\PdoOrderRepository;
 use App\Modules\Order\Application\Services\CheckoutService;
+use App\Modules\Payment\Domain\Contracts\PaymentProviderInterface;
+use App\Modules\Payment\Domain\Repositories\PaymentRepository;
+use App\Modules\Payment\Infrastructure\Persistence\PdoPaymentRepository;
+use App\Modules\Payment\Infrastructure\Providers\PaystackPaymentProvider;
+use App\Modules\Payment\Application\Services\PaymentService;
 
 final class ApplicationFactory
 {
@@ -320,6 +325,25 @@ final class ApplicationFactory
 
         $di->setShared('checkoutService', function () use ($di): CheckoutService {
             return new CheckoutService($di->getShared('orderRepository'));
+        });
+
+        $di->setShared('paymentRepository', function () use ($di): PaymentRepository {
+            return new PdoPaymentRepository($di->getShared('db'));
+        });
+
+        $di->setShared('paymentProvider', function (): PaymentProviderInterface {
+            $secretKey = getenv('PAYSTACK_SECRET_KEY') ?: ($_ENV['PAYSTACK_SECRET_KEY'] ?? '');
+            return new PaystackPaymentProvider($secretKey);
+        });
+
+        $di->setShared('paymentService', function () use ($di): PaymentService {
+            $callbackUrl = getenv('PAYSTACK_CALLBACK_URL') ?: ($_ENV['PAYSTACK_CALLBACK_URL'] ?? '');
+
+            return new PaymentService(
+                paymentRepository: $di->getShared('paymentRepository'),
+                paymentProvider: $di->getShared('paymentProvider'),
+                callbackUrl: $callbackUrl
+            );
         });
 
         //Dispatcher Injection
