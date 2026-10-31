@@ -49,6 +49,9 @@ use App\Modules\Vendor\Presentation\Validators\RejectVendorValidator;
 use App\Modules\Product\Application\Services\CategoryService;
 use App\Modules\Product\Domain\Repositories\CategoryRepository;
 use App\Modules\Product\Infrastructure\Persistence\PdoCategoryRepository;
+use App\Modules\Cart\Application\Services\CartService;
+use App\Modules\Cart\Domain\Repositories\CartRepository;
+use App\Modules\Cart\Infrastructure\Persistence\PdoCartRepository;
 
 final class ApplicationFactory
 {
@@ -297,6 +300,16 @@ final class ApplicationFactory
             'categoryService',
             fn(): CategoryService => new CategoryService($di->getShared('categoryRepository'))
         );
+
+        $di->setShared('cartRepository', function () use ($di): CartRepository {
+            return new PdoCartRepository($di->getShared('db'));
+        });
+
+        $di->setShared('cartService', function () use ($di): CartService {
+            return new CartService(
+                $di->getShared('cartRepository')
+            );
+        });
 
         //Dispatcher Injection
         $di->setShared('dispatcher', function () use ($di): Dispatcher {

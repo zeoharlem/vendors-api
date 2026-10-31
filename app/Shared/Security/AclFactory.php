@@ -65,6 +65,7 @@ final class AclFactory
             'reject',
         ],
         'notification' => ['view','mark_read'],
+        'cart' => ['view', 'manage'],
         'products' => ['view', 'create', 'update', 'delete'],
         'category' => [
             'view',
@@ -125,6 +126,7 @@ final class AclFactory
             'orders' => ['create', 'view_own', 'cancel_own'],
             'vendors' => ['apply', 'view'],
             'notification' => ['view', 'mark_read'],
+            'cart' => ['view', 'manage'],
         ],
 
         'vendor' => [
