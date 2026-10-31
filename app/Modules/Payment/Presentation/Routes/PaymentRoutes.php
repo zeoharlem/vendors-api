@@ -12,6 +12,17 @@ final class PaymentRoutes
     {
         $namespace = 'App\\Modules\\Payment\\Presentation\\Controllers';
 
+        // Public Paystack webhook.
+        $api->addPost(
+            '/payments/webhook/paystack',
+            [
+                'namespace' => $namespace,
+                'controller' => 'PaymentWebhook',
+                'action' => 'paystack',
+            ]
+        );
+
+        // Customer payment initialization.
         $api->addPost(
             '/payments/initialize',
             [
@@ -21,6 +32,7 @@ final class PaymentRoutes
             ]
         );
 
+        // Customer payment retrieval.
         $api->addGet(
             '/payments/{reference:[A-Za-z0-9.\-=]+}',
             [

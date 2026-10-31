@@ -8,6 +8,7 @@ use App\Modules\Payment\Application\Dtos\InitializePaymentDto;
 use App\Modules\Payment\Domain\Contracts\PaymentProviderInterface;
 use App\Modules\Payment\Domain\Repositories\PaymentRepository;
 use DomainException;
+use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
 
@@ -25,7 +26,9 @@ final class PaymentService
         InitializePaymentDto $dto
     ): array {
         if ($customerId === '') {
-            throw new DomainException('Authenticated customer is required.');
+            throw new DomainException(
+                'Authenticated customer is required.'
+            );
         }
 
         $order = $this->paymentRepository->findCustomerOrder(
@@ -73,7 +76,7 @@ final class PaymentService
             );
         }
 
-        // Reuse an existing initialized payment instead of creating duplicates.
+        // Reuse an existing initialized payment.
         $existingPayment = $this->paymentRepository
             ->findActivePaymentForOrder($dto->orderId);
 
@@ -81,6 +84,8 @@ final class PaymentService
             $existingPayment !== null
             && $existingPayment['status'] === 'initialized'
             && !empty($existingPayment['authorization_url'])
+            && (int) $existingPayment['amount_minor'] === $amountMinor
+            && strtoupper($existingPayment['currency']) === $currency
         ) {
             return $this->formatPaymentResponse($existingPayment);
         }
@@ -96,20 +101,22 @@ final class PaymentService
         );
 
         try {
-            $result = $this->paymentProvider->initializePayment([
-                'email' => $email,
-                'amount' => $amountMinor,
-                'currency' => $currency,
-                'reference' => $reference,
-                'callback_url' => $this->callbackUrl,
-                'metadata' => [
-                    'order_id' => $dto->orderId,
-                    'customer_id' => $customerId,
-                    'payment_id' => $payment['id'],
-                ],
-            ]);
+            $result = $this->paymentProvider->initializePayment(
+                [
+                    'email' => $email,
+                    'amount' => $amountMinor,
+                    'currency' => $currency,
+                    'reference' => $reference,
+                    'callback_url' => $this->callbackUrl,
+                    'metadata' => [
+                        'order_id' => $dto->orderId,
+                        'customer_id' => $customerId,
+                        'payment_id' => $payment['id'],
+                    ],
+                ]
+            );
 
-            if ($result['reference'] !== $reference) {
+            if (($result['reference'] ?? null) !== $reference) {
                 throw new RuntimeException(
                     'Payment provider returned an unexpected reference.'
                 );
@@ -128,6 +135,7 @@ final class PaymentService
                 );
 
             return $this->formatPaymentResponse($payment);
+
         } catch (Throwable $exception) {
             try {
                 $this->paymentRepository->markPaymentInitializationFailed(
@@ -155,9 +163,102 @@ final class PaymentService
             $reference
         );
 
-        return $payment !== null
-            ? $this->formatPaymentResponse($payment)
-            : null;
+        return $payment !== null ? $this->formatPaymentResponse($payment) : null;
+    }
+
+    /**
+     * Verify a payment directly with the configured payment provider.
+     *
+     * Used by the customer callback and webhook processing workflow.
+     */
+    public function verify(string $reference): array
+    {
+        $reference = trim($reference);
+
+        if ($reference === '') {
+            throw new InvalidArgumentException('Payment reference is required.');
+        }
+
+        $payment = $this->paymentRepository->findByReference($reference);
+
+        if ($payment === null) {
+            throw new DomainException('Payment not found.');
+        }
+
+        // Do not settle a successful payment more than once.
+        if ($payment['status'] === 'success') {
+            return $this->formatPaymentResponse($payment);
+        }
+
+        if ($payment['provider'] !== 'paystack') {
+            throw new DomainException(
+                'Unsupported payment provider for this verification request.'
+            );
+        }
+
+        $verification = $this->paymentProvider->verifyPayment($reference);
+
+        if (($verification['reference'] ?? null) !== $reference) {
+            throw new DomainException(
+                'Payment reference does not match.'
+            );
+        }
+
+        if (
+            (int) ($verification['amount'] ?? 0)
+            !== (int) $payment['amount_minor']
+        ) {
+            throw new DomainException(
+                'Payment amount does not match.'
+            );
+        }
+
+        if (
+            strtoupper((string) ($verification['currency'] ?? ''))
+            !== strtoupper((string) $payment['currency'])
+        ) {
+            throw new DomainException(
+                'Payment currency does not match.'
+            );
+        }
+
+        $status = strtolower((string) ($verification['status'] ?? ''));
+
+        if ($status === 'success') {
+            $transactionId = (string) (
+                $verification['provider_transaction_id'] ?? ''
+            );
+
+            if ($transactionId === '') {
+                throw new DomainException(
+                    'Payment provider did not return a transaction ID.'
+                );
+            }
+
+            $payment = $this->paymentRepository->confirmSuccessfulPayment(
+                reference: $reference,
+                providerTransactionId: $transactionId,
+                providerResponse: $verification['provider_response'] ?? []
+            );
+
+            return $this->formatPaymentResponse($payment);
+        }
+
+        if ($status === 'failed') {
+            $this->paymentRepository->markPaymentFailed(
+                reference: $reference,
+                failureReason: 'Paystack transaction failed.',
+                providerResponse: $verification['provider_response'] ?? []
+            );
+        }
+
+        $payment = $this->paymentRepository->findByReference($reference);
+
+        if ($payment === null) {
+            throw new DomainException('Payment not found.');
+        }
+
+        return $this->formatPaymentResponse($payment);
     }
 
     private function formatPaymentResponse(array $payment): array

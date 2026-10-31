@@ -67,8 +67,19 @@ final class JwtAuthMiddleware
     private function isPublicRoute(string $controller, string $action): bool
     {
         $publicRoutes = [
-            'auth' => ['index', 'login', 'register', 'refresh', 'logout'],
-            'health' => ['index'],
+            'auth' => [
+                'index',
+                'login',
+                'register',
+                'refresh',
+                'logout',
+            ],
+            'health' => [
+                'index',
+            ],
+            'paymentwebhook' => [
+                'paystack',
+            ],
         ];
 
         return in_array($action, $publicRoutes[$controller] ?? [], true);
