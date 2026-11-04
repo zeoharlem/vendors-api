@@ -26,4 +26,9 @@ interface PaymentEventRepository
         string $eventId,
         string $error
     ): void;
+
+    public function findByProviderEventId(
+        string $provider,
+        string $providerEventId
+    ): ?array;
 }

@@ -62,6 +62,18 @@ use App\Modules\Payment\Infrastructure\Providers\PaystackPaymentProvider;
 use App\Modules\Payment\Application\Services\PaymentService;
 use App\Modules\Payment\Infrastructure\Persistence\PdoPaymentEventRepository;
 use App\Modules\Payment\Infrastructure\Providers\PaystackWebhookSignatureVerifier;
+use App\Modules\Ledger\Domain\Repositories\LedgerRepository;
+use App\Modules\Ledger\Infrastructure\Persistence\PdoLedgerRepository;
+use App\Modules\Ledger\Application\Services\LedgerPostingService;
+use App\Modules\Ledger\Application\Services\CommissionCalculator;
+use App\Modules\Ledger\Domain\Contracts\CommissionCalculatorInterface;
+use App\Modules\Ledger\Domain\Repositories\VendorPayableRepository;
+use App\Modules\Ledger\Infrastructure\Persistence\PdoVendorPayableRepository;
+use App\Modules\Product\Application\Contracts\StoreAccessCheckerInterface;
+use App\Modules\Vendor\Application\Jobs\AutoAcceptExpiredDeliveriesJob;
+use App\Modules\Vendor\Application\Services\VendorOrderService;
+use App\Modules\Vendor\Domain\Repository\VendorOrderRepository;
+use App\Modules\Vendor\Infrastructure\Persistence\PdoVendorOrderRepository;
 
 final class ApplicationFactory
 {
@@ -245,7 +257,9 @@ final class ApplicationFactory
             },
         );
 
-        $di->setShared('vendorReviewService', function () use ($di) {
+        $di->setShared(
+            'vendorReviewService',
+            function () use ($di) {
                 return new VendorReviewService(
                     $di->getShared('vendorRepository'),
                     $di->getShared('notificationService'),
@@ -253,7 +267,9 @@ final class ApplicationFactory
             }
         );
 
-        $di->setShared('rejectVendorValidator', function () use ($di) {
+        $di->setShared(
+            'rejectVendorValidator',
+            function () use ($di) {
                 return new RejectVendorValidator();
             }
         );
@@ -272,7 +288,7 @@ final class ApplicationFactory
             'productService',
             fn(): ProductService => new ProductService(
                 $di->getShared('productRepository'),
-                $di->getShared('storeAccessChecker'),
+                $di->getShared(StoreAccessCheckerInterface::class),
                 $di->getShared('productVariantRepository'),
                 $di->getShared('inventoryRepository'),
                 $di->getShared('inventoryMovementRepository'),
@@ -330,7 +346,10 @@ final class ApplicationFactory
         });
 
         $di->setShared('paymentRepository', function () use ($di): PaymentRepository {
-            return new PdoPaymentRepository($di->getShared('db'));
+            return new PdoPaymentRepository(
+                $di->getShared('db'),
+                $di->getShared(LedgerPostingService::class)
+            );
         });
 
         $di->setShared('paymentProvider', function (): PaymentProviderInterface {
@@ -360,6 +379,73 @@ final class ApplicationFactory
             function () {
                 $secretKey = getenv('PAYSTACK_SECRET_KEY') ?: ($_ENV['PAYSTACK_SECRET_KEY'] ?? '');
                 return new PaystackWebhookSignatureVerifier((string) $secretKey);
+            }
+        );
+
+        $di->setShared(
+            LedgerRepository::class,
+            function () use ($di) {
+                return new PdoLedgerRepository($di->getShared('db'));
+            }
+        );
+
+        $di->setShared(
+            CommissionCalculatorInterface::class,
+            function () {
+                return new CommissionCalculator();
+            }
+        );
+
+        $di->setShared(
+            LedgerPostingService::class,
+            function () use ($di) {
+                return new LedgerPostingService(
+                    $di->getShared(LedgerRepository::class),
+                    $di->getShared(VendorPayableRepository::class),
+                    $di->getShared(CommissionCalculatorInterface::class),
+                    (int) ($_ENV['PLATFORM_DEFAULT_COMMISSION_BPS'] ?? 1000)
+                );
+            }
+        );
+
+        $di->setShared(
+            VendorPayableRepository::class,
+            function () use ($di) {
+                return new PdoVendorPayableRepository($di->getShared('db'));
+            }
+        );
+
+
+        $di->setShared(
+            StoreAccessCheckerInterface::class,
+            function () use ($di) {
+                return new PdoStoreAccessChecker($di->getShared('db'));
+            }
+        );
+
+        $di->setShared(
+            VendorOrderRepository::class,
+            function () use ($di) {
+                return new PdoVendorOrderRepository($di->getShared('db'));
+            }
+        );
+
+        $di->setShared(
+            VendorOrderService::class,
+            function () use ($di) {
+                return new VendorOrderService(
+                    $di->getShared(VendorOrderRepository::class),
+                    $di->getShared(StoreAccessCheckerInterface::class)
+                );
+            }
+        );
+
+        $di->setShared(
+            AutoAcceptExpiredDeliveriesJob::class,
+            function () use ($di) {
+                return new AutoAcceptExpiredDeliveriesJob(
+                    $di->getShared(VendorOrderRepository::class)
+                );
             }
         );
 
