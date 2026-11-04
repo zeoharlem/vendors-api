@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Payment\Infrastructure\Persistence;
 
+use App\Modules\Ledger\Application\Services\LedgerPostingService;
 use App\Modules\Payment\Domain\Repositories\PaymentRepository;
 use JsonException;
 use Phalcon\Contracts\Db\Adapter\Adapter as AdapterInterface;
@@ -12,7 +13,8 @@ use RuntimeException;
 final class PdoPaymentRepository implements PaymentRepository
 {
     public function __construct(
-        private readonly AdapterInterface $db
+        private readonly AdapterInterface $db,
+        private readonly LedgerPostingService $ledgerPostingService
     ) {
     }
 
@@ -491,14 +493,14 @@ final class PdoPaymentRepository implements PaymentRepository
                 // Commit the reservation.
                 $this->db->execute(
                     <<<'SQL'
-                    UPDATE public.inventory_reservations
-                    SET
-                        status = 'committed',
-                        committed_at = NOW(),
-                        updated_at = NOW()
-                    WHERE id = :reservation_id
-                      AND status = 'reserved'
-                SQL,
+                        UPDATE public.inventory_reservations
+                        SET
+                            status = 'committed',
+                            committed_at = NOW(),
+                            updated_at = NOW()
+                        WHERE id = :reservation_id
+                        AND status = 'reserved'
+                    SQL,
                     ['reservation_id' => $reservation['id']]
                 );
             }
@@ -571,6 +573,44 @@ final class PdoPaymentRepository implements PaymentRepository
                     ]),
                 ]
             );
+
+            // Retrieve and lock vendor orders with their commission overrides.
+            $result = $this->db->query(
+                <<<'SQL'
+                    SELECT
+                        vo.id,
+                        vo.order_id,
+                        vo.store_id,
+                        vo.order_number,
+                        vo.status,
+                        vo.subtotal_minor,
+                        vo.shipping_minor,
+                        vo.tax_minor,
+                        vo.discount_minor,
+                        vo.total_minor,
+                        vo.currency,
+                        s.commission_rate_bps
+                    FROM public.vendor_orders vo
+                    INNER JOIN public.stores s
+                        ON s.id = vo.store_id
+                    WHERE vo.order_id = :order_id
+                    ORDER BY vo.id
+                    FOR UPDATE OF vo
+                    SQL,
+                [
+                    'order_id' => $payment['order_id'],
+                ]
+            );
+
+            $vendorOrders = $result->fetchAll();
+
+            if ($vendorOrders === []) {
+                throw new RuntimeException(
+                    'No vendor orders were found for this payment.'
+                );
+            }
+
+            $this->ledgerPostingService->postPayment($payment, $vendorOrders);
 
             $this->db->commit();
 

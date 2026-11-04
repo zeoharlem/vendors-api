@@ -38,6 +38,17 @@ final class AuthorizationMiddleware
             'updateprofile' => ['vendors', 'profile.manage'],
         ],
 
+        'vendororder' => [
+            'index' => ['vendor_orders', 'view'],
+            'show' => ['vendor_orders', 'view'],
+            'accept' => ['vendor_orders', 'manage'],
+            'processing' => ['vendor_orders', 'manage'],
+            'readytoship' => ['vendor_orders', 'manage'],
+            'ship' => ['vendor_orders', 'manage'],
+            'delivered' => ['vendor_orders', 'manage'],
+            'confirmdelivery' => ['orders', 'confirm_delivery'],
+        ],
+
         'store' => [
             'index' => ['stores', 'view'],
             'show' => ['stores', 'view'],
