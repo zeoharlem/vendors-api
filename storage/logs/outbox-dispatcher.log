@@ -1,0 +1,19 @@
+[2026-11-05 00:50:03] Outbox dispatcher error [PDOException]: SQLSTATE[HY093]: Invalid parameter number: :event_types
+[2026-11-05 00:51:01] Outbox dispatcher error [PDOException]: SQLSTATE[HY093]: Invalid parameter number: :event_types
+[2026-11-05 09:52:42] Outbox dispatch completed. Claimed: 1, processed: 1, retry scheduled: 0, permanently failed: 0.
+[2026-11-05 10:04:43] Outbox dispatcher error [PDOException]: SQLSTATE[08P01]: <<Unknown error>>: 7 ERROR:  bind message supplies 5 parameters, but prepared statement "pdo_stmt_00000007" requires 6
+[2026-11-05 10:10:54] Outbox dispatcher error [PDOException]: SQLSTATE[08P01]: <<Unknown error>>: 7 ERROR:  bind message supplies 5 parameters, but prepared statement "pdo_stmt_00000007" requires 6
+[2026-11-05 10:10:54] #0 [internal function]: PDOStatement->execute()
+#1 [internal function]: Phalcon\Db\Adapter\Pdo\AbstractPdo->executePrepared(Object(PDOStatement), Array, Array)
+#2 [internal function]: Phalcon\Db\Adapter\Pdo\AbstractPdo->queryStatement('    UPDATE publ...', Array, Array)
+#3 /opt/homebrew/var/www/vendors-api/app/Modules/Notification/Infrastructure/Outbox/OutboxEventDispatcher.php(258): Phalcon\Db\Adapter\Pdo\AbstractPdo->query('    UPDATE publ...', Array)
+#4 /opt/homebrew/var/www/vendors-api/app/Modules/Notification/Infrastructure/Outbox/OutboxEventDispatcher.php(63): App\Modules\Notification\Infrastructure\Outbox\OutboxEventDispatcher->scheduleRetry(Array, Object(RuntimeException))
+#5 /opt/homebrew/var/www/vendors-api/cli/dispatch-outbox.php(75): App\Modules\Notification\Infrastructure\Outbox\OutboxEventDispatcher->dispatchPending(25)
+#6 {main}
+[2026-11-05 10:18:44] Outbox dispatch completed. Claimed: 1, processed: 0, retry scheduled: 1, permanently failed: 0.
+[2026-11-05 10:30:00] Outbox dispatch completed. Claimed: 1, processed: 1, retry scheduled: 0, permanently failed: 0.
+[2026-11-05 10:36:35] Outbox dispatch completed. Claimed: 1, processed: 0, retry scheduled: 1, permanently failed: 0.
+[2026-11-05 10:44:58] Outbox dispatch completed. Claimed: 1, processed: 0, retry scheduled: 1, permanently failed: 0.
+[2026-11-05 12:39:37] Outbox dispatch completed. Claimed: 2, processed: 1, retry scheduled: 1, permanently failed: 0.
+[2026-11-05 12:44:18] Outbox dispatch completed. Claimed: 1, processed: 0, retry scheduled: 1, permanently failed: 0.
+[2026-11-05 16:00:16] Outbox dispatch completed. Claimed: 3, processed: 2, retry scheduled: 1, permanently failed: 0.

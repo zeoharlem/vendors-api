@@ -9,12 +9,18 @@ use App\Modules\Payment\Domain\Repositories\PaymentRepository;
 use JsonException;
 use Phalcon\Contracts\Db\Adapter\Adapter as AdapterInterface;
 use RuntimeException;
+use App\Modules\Notification\Domain\Contracts\OutboxEventPublisherInterface;
+use App\Shared\Enums\EventTypes;
+use InvalidArgumentException;
+use Phalcon\Events\Event;
+use Throwable;
 
 final class PdoPaymentRepository implements PaymentRepository
 {
     public function __construct(
         private readonly AdapterInterface $db,
-        private readonly LedgerPostingService $ledgerPostingService
+        private readonly LedgerPostingService $ledgerPostingService,
+        private readonly OutboxEventPublisherInterface $outboxEventPublisher,
     ) {
     }
 
@@ -612,6 +618,22 @@ final class PdoPaymentRepository implements PaymentRepository
 
             $this->ledgerPostingService->postPayment($payment, $vendorOrders);
 
+            $this->outboxEventPublisher->publish(
+                eventType: EventTypes::PAYMENT_SUCCEEDED->value,
+                aggregateType: 'payment',
+                aggregateId: (string) $payment['id'],
+                idempotencyKey: EventTypes::PAYMENT_SUCCEEDED->value .':'. $payment['id'],
+                payload: [
+                    'payment_id' => (string) $payment['id'],
+                    'order_id' => (string) $payment['order_id'],
+                    'reference' => (string) $payment['reference'],
+                    'provider' => (string) $payment['provider'],
+                    'provider_transaction_id' => $providerTransactionId,
+                    'amount_minor' => (int) $payment['amount_minor'],
+                    'currency' => (string) $payment['currency'],
+                ],
+            );
+
             $this->db->commit();
 
             return $this->findByReference($reference)
@@ -619,45 +641,147 @@ final class PdoPaymentRepository implements PaymentRepository
                     'Confirmed payment could not be retrieved.'
                 );
 
-        } catch (\Throwable $exception) {
+        } catch (Throwable $exception) {
             $this->db->rollback();
 
             throw $exception;
         }
     }
 
+
     public function markPaymentFailed(
         string $reference,
         string $failureReason,
-        array $providerResponse = []
-    ): void {
-        $sql = <<<'SQL'
-        UPDATE public.payments
-        SET
-            status = 'failed',
-            failure_reason = :failure_reason,
-            provider_response = CAST(:provider_response AS JSONB),
-            failed_at = NOW(),
-            updated_at = NOW()
-        WHERE reference = :reference
-          AND status IN ('pending', 'initialized')
-    SQL;
+        array $providerResponse = [],
+    ): array {
+        $reference = trim($reference);
 
-        $this->db->execute($sql, [
-            'failure_reason' => mb_substr($failureReason, 0, 1000),
-            'provider_response' => $this->encodeJson($providerResponse),
-            'reference' => $reference,
-        ]);
-
-        // A payment already marked successful must never be downgraded.
-        $payment = $this->findByReference($reference);
-
-        if ($payment === null) {
-            throw new RuntimeException(
-                'Payment could not be found after attempting to mark it failed.'
+        if ($reference === '') {
+            throw new InvalidArgumentException(
+                'Payment reference is required.'
             );
         }
+
+        $this->db->begin();
+
+        try {
+            $result = $this->db->query(
+                <<<'SQL'
+                SELECT
+                    id,
+                    order_id,
+                    provider,
+                    reference,
+                    amount_minor,
+                    currency,
+                    status
+                FROM public.payments
+                WHERE reference = :reference
+                FOR UPDATE
+            SQL,
+                [
+                    'reference' => $reference,
+                ],
+            );
+
+            $payment = $result->fetch();
+
+            if (!$payment) {
+                throw new RuntimeException(
+                    'Payment not found.'
+                );
+            }
+
+            // Only pending or initialized payments can transition to failed.
+            // Successful and already-failed payments remain unchanged.
+            if (
+                !in_array(
+                    $payment['status'],
+                    ['pending', 'initialized'],
+                    true,
+                )
+            ) {
+                $currentPayment = $this->findByReference($reference);
+
+                if ($currentPayment === null) {
+                    throw new RuntimeException(
+                        'Payment could not be retrieved.'
+                    );
+                }
+
+                $this->db->commit();
+
+                return $currentPayment;
+            }
+
+            $failureReason = mb_substr($failureReason, 0, 1000);
+
+            $encodedProviderResponse = $this->encodeJson(
+                $providerResponse
+            );
+
+            $result = $this->db->query(
+                <<<'SQL'
+                UPDATE public.payments
+                SET
+                    status = 'failed',
+                    failure_reason = :failure_reason,
+                    provider_response = CAST(:provider_response AS JSONB),
+                    failed_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = :payment_id
+                  AND status IN ('pending', 'initialized')
+                RETURNING id
+            SQL,
+                [
+                    'failure_reason' => $failureReason,
+                    'provider_response' => $encodedProviderResponse,
+                    'payment_id' => (string) $payment['id'],
+                ],
+            );
+
+            $updatedPayment = $result->fetch();
+
+            if (!$updatedPayment) {
+                throw new RuntimeException(
+                    'Payment failure update could not be confirmed.'
+                );
+            }
+
+            $this->outboxEventPublisher->publish(
+                eventType: EventTypes::PAYMENT_FAILED->value,
+                aggregateType: 'payment',
+                aggregateId: (string) $payment['id'],
+                idempotencyKey: EventTypes::PAYMENT_FAILED->value . ':' . $payment['id'],
+                payload: [
+                    'payment_id' => (string) $payment['id'],
+                    'order_id' => (string) $payment['order_id'],
+                    'reference' => (string) $payment['reference'],
+                    'provider' => (string) $payment['provider'],
+                    'amount_minor' => (int) $payment['amount_minor'],
+                    'currency' => (string) $payment['currency'],
+                    'failure_reason' => $failureReason,
+                ],
+            );
+
+            $updatedPayment = $this->findByReference($reference);
+
+            if ($updatedPayment === null) {
+                throw new RuntimeException(
+                    'Failed payment could not be retrieved.'
+                );
+            }
+
+            $this->db->commit();
+
+            return $updatedPayment;
+        } catch (Throwable $exception) {
+            $this->db->rollback();
+
+            throw $exception;
+        }
     }
+
 
     private function assertPaymentUpdated(
         string $reference,

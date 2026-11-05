@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Modules\Order\Infrastructure\Persistence;
 
+use App\Modules\Notification\Domain\Contracts\OutboxEventPublisherInterface;
 use App\Modules\Order\Domain\Repositories\OrderRepository;
+use App\Shared\Enums\EventTypes;
 use DomainException;
 use JsonException;
 use Phalcon\Contracts\Db\Adapter\Adapter as AdapterInterface;
@@ -14,6 +16,7 @@ final readonly class PdoOrderRepository implements OrderRepository
 {
     public function __construct(
         private AdapterInterface $db,
+        private readonly OutboxEventPublisherInterface $outboxEventPublisher,
     ) {
     }
 
@@ -563,6 +566,26 @@ final readonly class PdoOrderRepository implements OrderRepository
             if ($order === null) {
                 throw new DomainException('The order was created but could not be retrieved.');
             }
+
+            /**
+             * Record the order.placed event in the same database transaction.
+             * The outbox dispatcher will publish it after this transaction commits. 
+            **/
+            $this->outboxEventPublisher->publish(
+                eventType: EventTypes::ORDER_PLACED->value,
+                aggregateType: 'order',
+                aggregateId: $orderId,
+                idempotencyKey: EventTypes::ORDER_PLACED->value . ':' . $orderId,
+                payload: [
+                    'order_id' => $orderId,
+                    'customer_id' => $customerId,
+                    'order_number' => $orderNumber,
+                    'currency' => $currency,
+                    'subtotal_minor' => $subtotalMinor,
+                    'total_minor' => $orderTotalMinor,
+                ],
+            );
+            /*** Publish Event */
 
             $this->db->commit();
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Bootstrap;
 
 use App\Bootstrap\Routes\ApiRoutes;
+use App\Modules\Notification\Infrastructure\Queue\FailedEmailTransport;
 use App\Modules\Product\Application\Services\ProductService;
 use App\Modules\Product\Domain\Repositories\ProductCategoryRepository;
 use App\Modules\Product\Domain\Repositories\ProductVariantRepository;
@@ -69,11 +70,42 @@ use App\Modules\Ledger\Application\Services\CommissionCalculator;
 use App\Modules\Ledger\Domain\Contracts\CommissionCalculatorInterface;
 use App\Modules\Ledger\Domain\Repositories\VendorPayableRepository;
 use App\Modules\Ledger\Infrastructure\Persistence\PdoVendorPayableRepository;
+use App\Modules\Notification\Domain\Contracts\EmailSenderInterface;
+use App\Modules\Notification\Infrastructure\Email\SendGridEmailSender;
 use App\Modules\Product\Application\Contracts\StoreAccessCheckerInterface;
 use App\Modules\Vendor\Application\Jobs\AutoAcceptExpiredDeliveriesJob;
 use App\Modules\Vendor\Application\Services\VendorOrderService;
 use App\Modules\Vendor\Domain\Repository\VendorOrderRepository;
 use App\Modules\Vendor\Infrastructure\Persistence\PdoVendorOrderRepository;
+use App\Modules\Notification\Infrastructure\Queue\DoctrineConnectionFactory;
+use Doctrine\DBAL\Connection;
+use App\Modules\Notification\Infrastructure\Queue\MessengerTransportFactory;
+use Doctrine\DBAL\Connection as DoctrineDbalConnection;
+use Symfony\Component\Messenger\Bridge\Doctrine\Transport\DoctrineTransport;
+use App\Modules\Notification\Domain\Contracts\EmailDeliveryRepositoryInterface;
+use App\Modules\Notification\Infrastructure\Persistence\PdoEmailDeliveryRepository;
+use App\Modules\Notification\Application\Handlers\SendEmailHandler;
+use App\Modules\Notification\Application\Messages\SendEmailMessage;
+use App\Modules\Notification\Domain\Contracts\EmailTemplateRendererInterface;
+use App\Modules\Notification\Infrastructure\Email\MailtrapEmailSender;
+use App\Modules\Notification\Infrastructure\Email\PhpEmailTemplateRenderer;
+use App\Modules\Notification\Infrastructure\Messenger\EmailMessageSenderLocator;
+use Symfony\Component\Messenger\Handler\HandlersLocator;
+use Symfony\Component\Messenger\MessageBus;
+use Symfony\Component\Messenger\MessageBusInterface;
+use Symfony\Component\Messenger\Middleware\HandleMessageMiddleware;
+use Symfony\Component\Messenger\Middleware\SendMessageMiddleware;
+use RuntimeException;
+use App\Modules\Notification\Domain\Contracts\OutboxEventPublisherInterface;
+use App\Modules\Notification\Infrastructure\Persistence\PdoOutboxEventPublisher;
+use App\Modules\Notification\Application\Handlers\OrderPlacedEmailHandler;
+use App\Modules\Notification\Infrastructure\Outbox\OutboxEventDispatcher;
+use App\Modules\Notification\Infrastructure\Outbox\Handlers\OrderPlacedOutboxEventHandler;
+use App\Modules\Notification\Infrastructure\Outbox\OutboxEventHandlerRegistry;
+use App\Modules\Notification\Application\Handlers\PaymentStatusEmailHandler;
+use App\Modules\Notification\Infrastructure\Outbox\Handlers\PaymentFailedOutboxEventHandler;
+use App\Modules\Notification\Infrastructure\Outbox\Handlers\PaymentSucceededOutboxEventHandler;
+use App\Shared\Enums\EventTypes;
 
 final class ApplicationFactory
 {
@@ -120,6 +152,31 @@ final class ApplicationFactory
                 'password' => $config['password'],
             ]);
         });
+
+        $di->setShared(
+            Connection::class,
+            function () use ($di): Connection {
+                return DoctrineConnectionFactory::create($di->getShared('config')['db']);
+            }
+        );
+
+        $di->setShared(
+            DoctrineTransport::class,
+            function () use ($di): DoctrineTransport {
+                $connection = $di->getShared(Connection::class);
+
+                return MessengerTransportFactory::create($connection, queueName: 'emails');
+            }
+        );
+
+        $di->setShared(
+            FailedEmailTransport::class,
+            function () use ($di): DoctrineTransport {
+                $connection = $di->getShared(Connection::class);
+
+                return MessengerTransportFactory::create($connection, queueName: 'failed_emails');
+            }
+        );
 
         //JsonResponder for Payload
         $di->setShared('jsonResponder', fn(): JsonResponder => new JsonResponder());
@@ -337,8 +394,18 @@ final class ApplicationFactory
             );
         });
 
+        $di->setShared(
+            OutboxEventPublisherInterface::class,
+            function () use ($di) {
+                return new PdoOutboxEventPublisher($di->getShared('db'));
+            }
+        );
+
         $di->setShared('orderRepository', function () use ($di): OrderRepository {
-            return new PdoOrderRepository($di->getShared('db'));
+            return new PdoOrderRepository(
+                $di->getShared('db'),
+                $di->getShared(OutboxEventPublisherInterface::class)
+            );
         });
 
         $di->setShared('checkoutService', function () use ($di): CheckoutService {
@@ -348,7 +415,8 @@ final class ApplicationFactory
         $di->setShared('paymentRepository', function () use ($di): PaymentRepository {
             return new PdoPaymentRepository(
                 $di->getShared('db'),
-                $di->getShared(LedgerPostingService::class)
+                $di->getShared(LedgerPostingService::class),
+                $di->getShared(OutboxEventPublisherInterface::class)
             );
         });
 
@@ -448,6 +516,196 @@ final class ApplicationFactory
                 );
             }
         );
+
+        $di->setShared(
+            EmailSenderInterface::class,
+            function () {
+                return new SendGridEmailSender(
+                    apiKey: (string) ($_ENV['SENDGRID_API_KEY'] ?? ''),
+                    fromEmail: (string) ($_ENV['MAIL_FROM_EMAIL'] ?? ''),
+                    fromName: (string) ($_ENV['MAIL_FROM_NAME'] ?? 'Marketplace'),
+                );
+            }
+        );
+
+        $di->setShared(
+            EmailDeliveryRepositoryInterface::class,
+            function () use ($di) {
+                return new PdoEmailDeliveryRepository($di->getShared('db'));
+            }
+        );
+
+        $di->setShared(
+            EmailTemplateRendererInterface::class,
+            function () {
+                return new PhpEmailTemplateRenderer();
+            }
+        );
+
+        $di->setShared(
+            SendEmailHandler::class,
+            function () use ($di) {
+                return new SendEmailHandler(
+                    deliveryRepository: $di->getShared(
+                        EmailDeliveryRepositoryInterface::class
+                    ),
+                    templateRenderer: $di->getShared(
+                        EmailTemplateRendererInterface::class
+                    ),
+                    emailSender: $di->getShared(
+                        EmailSenderInterface::class
+                    ),
+                );
+            }
+        );
+
+        $di->setShared(
+            EmailMessageSenderLocator::class,
+            function () use ($di) {
+                return new EmailMessageSenderLocator($di->getShared(DoctrineTransport::class));
+            }
+        );
+
+        $di->setShared(
+            MessageBusInterface::class,
+            function () use ($di) {
+                $handler = $di->getShared(SendEmailHandler::class);
+
+                $handlersLocator = new HandlersLocator(
+                    [
+                        SendEmailMessage::class => [$handler],
+                    ]
+                );
+
+                return new MessageBus(
+                    [
+                        new SendMessageMiddleware($di->getShared(EmailMessageSenderLocator::class)),
+                        new HandleMessageMiddleware($handlersLocator),
+                    ]
+                );
+            }
+        );
+
+
+        $di->setShared(
+            EmailSenderInterface::class,
+            function () {
+                $getEnv = static function (string $key, mixed $default = null): mixed {
+                    $value = $_ENV[$key] ?? $_SERVER[$key] ?? getenv($key);
+
+                    return $value !== false && $value !== null
+                        ? $value
+                        : $default;
+                };
+
+                $provider = strtolower(
+                    (string) $getEnv('MAIL_PROVIDER', 'mailtrap')
+                );
+
+                if ($provider !== 'mailtrap') {
+                    throw new RuntimeException(
+                        sprintf('Unsupported email provider: %s', $provider)
+                    );
+                }
+
+                $useSandbox = filter_var(
+                    $getEnv('MAILTRAP_USE_SANDBOX', 'true'),
+                    FILTER_VALIDATE_BOOLEAN
+                );
+
+                if (!$useSandbox) {
+                    throw new RuntimeException(
+                        'This Mailtrap adapter is currently restricted to Sandbox mode.'
+                    );
+                }
+
+                return new MailtrapEmailSender(
+                    apiKey: (string) $getEnv('MAILTRAP_API_KEY', ''),
+                    inboxId: (int) $getEnv('MAILTRAP_INBOX_ID', 0),
+                    fromEmail: (string) $getEnv('MAIL_FROM_EMAIL', 'smtp@mailtrap.io'),
+                    fromName: (string) $getEnv('MAIL_FROM_NAME', 'Vendors API'),
+                );
+            }
+        );
+
+        $di->setShared(
+            OrderPlacedEmailHandler::class,
+            function () use ($di) {
+                return new OrderPlacedEmailHandler(
+                    db: $di->getShared('db'),
+                    deliveryRepository: $di->getShared(EmailDeliveryRepositoryInterface::class),
+                    messageBus: $di->getShared(MessageBusInterface::class),
+                );
+            }
+        );
+
+        $di->setShared(
+            OutboxEventDispatcher::class,
+            function () use ($di) {
+                return new OutboxEventDispatcher(
+                    db: $di->getShared('db'),
+                    handlerRegistry: $di->getShared(OutboxEventHandlerRegistry::class),
+                );
+            }
+        );
+
+        $di->setShared(
+            OrderPlacedOutboxEventHandler::class,
+            function () use ($di) {
+                return new OrderPlacedOutboxEventHandler(
+                    orderPlacedEmailHandler: $di->getShared(OrderPlacedEmailHandler::class),
+                );
+            },
+        );
+
+        $di->setShared(
+            OutboxEventHandlerRegistry::class,
+            function () use ($di) {
+                return new OutboxEventHandlerRegistry(
+                    handlers: [
+                        EventTypes::ORDER_PLACED->value => $di->getShared(
+                            OrderPlacedOutboxEventHandler::class
+                        ),
+                        EventTypes::PAYMENT_SUCCEEDED->value => $di->getShared(
+                            PaymentSucceededOutboxEventHandler::class
+                        ),
+                        EventTypes::PAYMENT_FAILED->value => $di->getShared(
+                            PaymentFailedOutboxEventHandler::class
+                        ),
+                    ],
+                );
+            },
+        );
+
+        $di->setShared(
+            PaymentStatusEmailHandler::class,
+            function () use ($di) {
+                return new PaymentStatusEmailHandler(
+                    db: $di->getShared('db'),
+                    deliveryRepository: $di->getShared(EmailDeliveryRepositoryInterface::class),
+                    messageBus: $di->getShared(MessageBusInterface::class),
+                );
+            },
+        );
+
+        $di->setShared(
+            PaymentSucceededOutboxEventHandler::class,
+            function () use ($di) {
+                return new PaymentSucceededOutboxEventHandler(
+                    paymentStatusEmailHandler: $di->getShared(PaymentStatusEmailHandler::class),
+                );
+            },
+        );
+
+        $di->setShared(
+            PaymentFailedOutboxEventHandler::class,
+            function () use ($di) {
+                return new PaymentFailedOutboxEventHandler(
+                    paymentStatusEmailHandler: $di->getShared(PaymentStatusEmailHandler::class),
+                );
+            },
+        );
+
 
         //Dispatcher Injection
         $di->setShared('dispatcher', function () use ($di): Dispatcher {
