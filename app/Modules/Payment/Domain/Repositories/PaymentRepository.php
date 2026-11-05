@@ -71,5 +71,5 @@ interface PaymentRepository
         string $reference,
         string $failureReason,
         array $providerResponse = []
-    ): void;
+    ): array;
 }
