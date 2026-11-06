@@ -105,6 +105,8 @@ use App\Modules\Notification\Infrastructure\Outbox\OutboxEventHandlerRegistry;
 use App\Modules\Notification\Application\Handlers\PaymentStatusEmailHandler;
 use App\Modules\Notification\Infrastructure\Outbox\Handlers\PaymentFailedOutboxEventHandler;
 use App\Modules\Notification\Infrastructure\Outbox\Handlers\PaymentSucceededOutboxEventHandler;
+use App\Modules\Notification\Application\Handlers\VendorOrderEmailHandler;
+use App\Modules\Notification\Infrastructure\Outbox\Handlers\VendorOrderStatusOutboxEventHandler;
 use App\Shared\Enums\EventTypes;
 
 final class ApplicationFactory
@@ -494,7 +496,10 @@ final class ApplicationFactory
         $di->setShared(
             VendorOrderRepository::class,
             function () use ($di) {
-                return new PdoVendorOrderRepository($di->getShared('db'));
+                return new PdoVendorOrderRepository(
+                    $di->getShared('db'),
+                    $di->getShared(OutboxEventPublisherInterface::class)
+                );
             }
         );
 
@@ -659,6 +664,47 @@ final class ApplicationFactory
         );
 
         $di->setShared(
+            VendorOrderEmailHandler::class,
+            function () use ($di) {
+                return new VendorOrderEmailHandler(
+                    db: $di->getShared('db'),
+                    deliveryRepository: $di->getShared(EmailDeliveryRepositoryInterface::class),
+                    messageBus: $di->getShared(MessageBusInterface::class),
+                );
+            },
+        );
+
+        $di->setShared(
+            'vendorOrderAcceptedOutboxEventHandler',
+            function () use ($di) {
+                return new VendorOrderStatusOutboxEventHandler(
+                    emailHandler: $di->getShared(VendorOrderEmailHandler::class),
+                    expectedEventType: EventTypes::VENDOR_ORDER_ACCEPTED,
+                );
+            },
+        );
+
+        $di->setShared(
+            'vendorOrderShippedOutboxEventHandler',
+            function () use ($di) {
+                return new VendorOrderStatusOutboxEventHandler(
+                    emailHandler: $di->getShared(VendorOrderEmailHandler::class),
+                    expectedEventType: EventTypes::VENDOR_ORDER_SHIPPED,
+                );
+            },
+        );
+
+        $di->setShared(
+            'vendorOrderCompletedOutboxEventHandler',
+            function () use ($di) {
+                return new VendorOrderStatusOutboxEventHandler(
+                    emailHandler: $di->getShared(VendorOrderEmailHandler::class),
+                    expectedEventType: EventTypes::VENDOR_ORDER_COMPLETED,
+                );
+            },
+        );
+
+        $di->setShared(
             OutboxEventHandlerRegistry::class,
             function () use ($di) {
                 return new OutboxEventHandlerRegistry(
@@ -671,6 +717,15 @@ final class ApplicationFactory
                         ),
                         EventTypes::PAYMENT_FAILED->value => $di->getShared(
                             PaymentFailedOutboxEventHandler::class
+                        ),
+                        EventTypes::VENDOR_ORDER_ACCEPTED->value => $di->getShared(
+                            'vendorOrderAcceptedOutboxEventHandler'
+                        ),
+                        EventTypes::VENDOR_ORDER_SHIPPED->value => $di->getShared(
+                            'vendorOrderShippedOutboxEventHandler'
+                        ),
+                        EventTypes::VENDOR_ORDER_COMPLETED->value => $di->getShared(
+                            'vendorOrderCompletedOutboxEventHandler'
                         ),
                     ],
                 );

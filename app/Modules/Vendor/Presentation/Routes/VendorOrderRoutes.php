@@ -76,7 +76,7 @@ final class VendorOrderRoutes
         );
 
         $api->addPost(
-            '/orders/{id}/confirm-delivery',
+            '/vendor/orders/{id}/confirm-delivery',
             [
                 'namespace' => $namespace,
                 'controller' => 'vendororder',

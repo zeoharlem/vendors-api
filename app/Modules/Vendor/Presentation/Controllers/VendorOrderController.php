@@ -164,10 +164,7 @@ final class VendorOrderController extends Controller
                 $dto->trackingUrl
             );
 
-            return $this->jsonResponder->success(
-                $result,
-                'Vendor order shipped successfully.'
-            );
+            return $this->jsonResponder->success($result);
         } catch (InvalidArgumentException $exception) {
             return $this->jsonResponder->error(
                 'VALIDATION_ERROR',
@@ -194,17 +191,16 @@ final class VendorOrderController extends Controller
                 $id
             );
 
-            return $this->jsonResponder->success(
-                $vendorOrder,
-                'Vendor order marked as delivered.'
-            );
+            return $this->jsonResponder->success($vendorOrder);
         } catch (InvalidArgumentException $exception) {
             return $this->jsonResponder->error(
+                'UNPROCESSABLE_ENTITY',
                 $exception->getMessage(),
                 422
             );
         } catch (Throwable $exception) {
             return $this->jsonResponder->error(
+                'BAD_REQUEST',
                 $exception->getMessage(),
                 400
             );
@@ -251,31 +247,24 @@ final class VendorOrderController extends Controller
     public function confirmDeliveryAction(): ResponseInterface
     {
         try {
-            $customerId = (string) $this->dispatcher->getParam('userAuthId');
-
-            $vendorOrderId = (string) $this->dispatcher->getParam('id');
+            $customerId = (string) $this->dispatcher->getParameter('userAuthId');
+            $vendorOrderId = (string) $this->dispatcher->getParameter('id');
 
             if ($customerId === '' || $vendorOrderId === '') {
                 return $this->jsonResponder->error(
-                    'INVALID_REQUEST',
+                    'BAD_REQUEST',
                     'Customer identity or vendor order ID is missing.',
                     400
                 );
             }
 
-            $vendorOrder = $this->service()->confirmDelivery(
-                $customerId,
-                $vendorOrderId
-            );
+            $vendorOrder = $this->service()->confirmDelivery($customerId, $vendorOrderId);
 
-            return $this->jsonResponder->success(
-                $vendorOrder,
-                'Delivery confirmed successfully.'
-            );
+            return $this->jsonResponder->success($vendorOrder);
 
         } catch (InvalidArgumentException $exception) {
             return $this->jsonResponder->error(
-                'INVALID_REQUEST',
+                'UNPROCESSABLE_ENTITY',
                 $exception->getMessage(),
                 422
             );
