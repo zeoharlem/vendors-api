@@ -7,6 +7,7 @@ namespace App\Modules\Cart\Infrastructure\Persistence;
 use App\Modules\Cart\Domain\Repositories\CartRepository;
 use DomainException;
 use Phalcon\Contracts\Db\Adapter\Adapter as AdapterInterface;
+use Phalcon\Db\Enum;
 use RuntimeException;
 use Throwable;
 
@@ -33,15 +34,15 @@ final readonly class PdoCartRepository implements CartRepository
 
         $cart = $this->db->query(
             <<<'SQL'
-            SELECT id, customer_id, status, currency, expires_at,
-                   created_at, updated_at
-            FROM public.carts
-            WHERE customer_id = ?
-              AND status = 'active'
-            LIMIT 1
+                SELECT id, customer_id, status, currency, expires_at,
+                    created_at, updated_at
+                FROM public.carts
+                WHERE customer_id = ?
+                AND status = 'active'
+                LIMIT 1
             SQL,
-            [$customerId]
-        )->fetch();
+                [$customerId]
+            )->fetch();
 
         if (!$cart) {
             throw new RuntimeException('Unable to create or retrieve cart.');
@@ -54,12 +55,12 @@ final readonly class PdoCartRepository implements CartRepository
     {
         $cart = $this->db->query(
             <<<'SQL'
-            SELECT id, customer_id, status, currency, expires_at,
-                   created_at, updated_at
-            FROM public.carts
-            WHERE customer_id = ?
-              AND status = 'active'
-            LIMIT 1
+                SELECT id, customer_id, status, currency, expires_at,
+                    created_at, updated_at
+                FROM public.carts
+                WHERE customer_id = ?
+                AND status = 'active'
+                LIMIT 1
             SQL,
             [$customerId]
         )->fetch();
@@ -249,8 +250,7 @@ final readonly class PdoCartRepository implements CartRepository
                 'quantity' => $newQuantity,
                 'currency' => $variant['currency'],
                 'unit_price_minor' => (int) $variant['price_minor'],
-                'line_total_minor' =>
-                    (int) $variant['price_minor'] * $newQuantity,
+                'line_total_minor' => (int) $variant['price_minor'] * $newQuantity,
             ];
         } catch (Throwable $exception) {
             $this->db->rollback();

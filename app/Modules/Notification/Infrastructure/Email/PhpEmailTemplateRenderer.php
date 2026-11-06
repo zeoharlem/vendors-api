@@ -19,6 +19,11 @@ final class PhpEmailTemplateRenderer implements EmailTemplateRendererInterface
             'payment_success' => $this->renderPaymentSuccess($templateData),
             'payment_failed' => $this->renderPaymentFailed($templateData),
 
+            'vendor_order_accepted' => $this->renderVendorOrderAccepted($templateData),
+            'vendor_order_shipped' => $this->renderVendorOrderShipped($templateData),
+            'vendor_order_completed' => $this->renderVendorOrderCompleted($templateData),
+
+
             default => throw new InvalidArgumentException(
                 sprintf('Unsupported email template: %s', $templateKey)
             ),
@@ -434,6 +439,222 @@ final class PhpEmailTemplateRenderer implements EmailTemplateRendererInterface
     /**
      * @param array<string, mixed> $data
      */
+    private function renderVendorOrderAccepted(array $data): EmailTemplateContent
+    {
+        $customerName = $this->optionalString($data, 'customer_name', 'there');
+        $orderNumber = $this->requiredString($data, 'order_number');
+
+        $html = $this->layout(
+            sprintf(
+                <<<'HTML'
+            <h2 style="color:#166534;margin-top:0;">Your order has been accepted!</h2>
+
+            <p>Hello %s,</p>
+
+            <p>
+                Good news! The vendor handling part of your order has accepted it
+                and will begin processing it.
+            </p>
+
+            <p>
+                <strong>Order number:</strong> %s
+            </p>
+
+            <p>
+                We will notify you when this part of your order is shipped.
+            </p>
+            HTML,
+                $this->escape($customerName),
+                $this->escape($orderNumber),
+            ),
+        );
+
+        $text = implode("\n", [
+            'ORDER ACCEPTED',
+            '',
+            sprintf('Hello %s,', $customerName),
+            '',
+            'Good news! The vendor handling part of your order has accepted it and will begin processing it.',
+            '',
+            sprintf('Order number: %s', $orderNumber),
+            '',
+            'We will notify you when this part of your order is shipped.',
+        ]);
+
+        return new EmailTemplateContent(
+            htmlContent: $html,
+            textContent: $text,
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private function renderVendorOrderShipped(array $data): EmailTemplateContent
+    {
+        $customerName = $this->optionalString($data, 'customer_name', 'there');
+        $orderNumber = $this->requiredString($data, 'order_number');
+
+        $trackingNumber = $this->optionalString(
+            $data,
+            'tracking_number',
+            '',
+        );
+
+        $trackingUrl = $this->optionalHttpUrl($data, 'tracking_url');
+
+        $trackingHtml = '';
+        $trackingText = [];
+
+        if ($trackingNumber !== '') {
+            $trackingHtml .= sprintf(
+                '<p><strong>Tracking number:</strong> %s</p>',
+                $this->escape($trackingNumber),
+            );
+
+            $trackingText[] = sprintf('Tracking number: %s', $trackingNumber);
+        }
+
+        if ($trackingUrl !== null) {
+            $trackingHtml .= sprintf(
+                <<<'HTML'
+            <p style="margin:24px 0;">
+                <a href="%s"
+                   style="display:inline-block;background:#172554;color:#ffffff;
+                   text-decoration:none;padding:13px 22px;border-radius:6px;">
+                    Track your delivery
+                </a>
+            </p>
+            HTML,
+                $this->escape($trackingUrl),
+            );
+
+            $trackingText[] = sprintf('Track your delivery: %s', $trackingUrl);
+        }
+
+        $html = $this->layout(
+            sprintf(
+                <<<'HTML'
+            <h2 style="color:#166534;margin-top:0;">Your order has been shipped!</h2>
+
+            <p>Hello %s,</p>
+
+            <p>
+                The vendor handling part of your order has shipped it.
+                Your delivery is now on its way.
+            </p>
+
+            <p>
+                <strong>Order number:</strong> %s
+            </p>
+
+            %s
+
+            <p>
+                Please use the tracking information above, where available,
+                to follow your delivery.
+            </p>
+            HTML,
+                $this->escape($customerName),
+                $this->escape($orderNumber),
+                $trackingHtml,
+            ),
+        );
+
+        $text = implode("\n", [
+            'ORDER SHIPPED',
+            '',
+            sprintf('Hello %s,', $customerName),
+            '',
+            'The vendor handling part of your order has shipped it. Your delivery is now on its way.',
+            '',
+            sprintf('Order number: %s', $orderNumber),
+            ...$trackingText,
+            '',
+            'Please use the tracking information above, where available, to follow your delivery.',
+        ]);
+
+        return new EmailTemplateContent(
+            htmlContent: $html,
+            textContent: $text,
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private function renderVendorOrderCompleted(array $data): EmailTemplateContent
+    {
+        $customerName = $this->optionalString($data, 'customer_name', 'there');
+        $orderNumber = $this->requiredString($data, 'order_number');
+
+        $completionSource = $this->requiredString($data, 'completion_source');
+
+        $completionMessage = match ($completionSource) {
+            'customer_confirmation' =>
+                'You confirmed that this delivery was received successfully.',
+
+            'automatic_acceptance' =>
+                'This delivery was automatically marked as completed because the delivery acceptance period expired.',
+
+            default => throw new InvalidArgumentException(
+                'Unsupported vendor order completion source.'
+            ),
+        };
+
+        $html = $this->layout(
+            sprintf(
+                <<<'HTML'
+            <h2 style="color:#166534;margin-top:0;">Your order delivery is complete!</h2>
+
+            <p>Hello %s,</p>
+
+            <p>
+                The vendor handling this part of your order has completed the delivery.
+            </p>
+
+            <p>
+                %s
+            </p>
+
+            <p>
+                <strong>Order number:</strong> %s
+            </p>
+
+            <p>
+                Thank you for shopping with us.
+                We appreciate your business.
+            </p>
+            HTML,
+                $this->escape($customerName),
+                $this->escape($completionMessage),
+                $this->escape($orderNumber),
+            ),
+        );
+
+        $text = implode("\n", [
+            'ORDER DELIVERY COMPLETED',
+            '',
+            sprintf('Hello %s,', $customerName),
+            '',
+            'The vendor handling this part of your order has completed the delivery.',
+            '',
+            $completionMessage,
+            '',
+            sprintf('Order number: %s', $orderNumber),
+            '',
+            'Thank you for shopping with us. We appreciate your business.',
+        ]);
+
+        return new EmailTemplateContent(
+            htmlContent: $html,
+            textContent: $text,
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
     private function requiredString(array $data, string $key): string
     {
         $value = $data[$key] ?? null;
@@ -567,5 +788,47 @@ final class PhpEmailTemplateRenderer implements EmailTemplateRendererInterface
             ENT_QUOTES | ENT_SUBSTITUTE,
             'UTF-8'
         );
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private function optionalHttpUrl(
+        array $data,
+        string $key,
+    ): ?string {
+        $value = $data[$key] ?? null;
+
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            throw new InvalidArgumentException(
+                sprintf('Email template field "%s" must be a URL.', $key)
+            );
+        }
+
+        $parts = parse_url($value);
+
+        if (
+            filter_var($value, FILTER_VALIDATE_URL) === false
+            || !is_array($parts)
+            || !in_array(
+                strtolower((string) ($parts['scheme'] ?? '')),
+                ['http', 'https'],
+                true,
+            )
+            || empty($parts['host'])
+        ) {
+            throw new InvalidArgumentException(
+                sprintf(
+                    'Email template field "%s" must be a valid HTTP or HTTPS URL.',
+                    $key,
+                )
+            );
+        }
+
+        return $value;
     }
 }

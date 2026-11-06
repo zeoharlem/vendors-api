@@ -6,6 +6,8 @@ namespace App\Modules\Vendor\Infrastructure\Persistence;
 
 use App\Modules\Vendor\Domain\Repository\VendorOrderRepository;
 use Phalcon\Contracts\Db\Adapter\Adapter as AdapterInterface;
+use App\Modules\Notification\Domain\Contracts\OutboxEventPublisherInterface;
+use App\Shared\Enums\EventTypes;
 use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
@@ -13,7 +15,8 @@ use Throwable;
 final class PdoVendorOrderRepository implements VendorOrderRepository
 {
     public function __construct(
-        private readonly AdapterInterface $db
+        private readonly AdapterInterface $db,
+        private readonly OutboxEventPublisherInterface $outboxEventPublisher,
     ) {
     }
 
@@ -136,8 +139,11 @@ final class PdoVendorOrderRepository implements VendorOrderRepository
         $trackingUrl = $additionalData['tracking_url'] ?? null;
         $acceptanceDeadline = $additionalData['acceptance_deadline'] ?? null;
 
-        $result = $this->db->query(
-            <<<'SQL'
+        $this->db->begin();
+
+        try {
+            $result = $this->db->query(
+                <<<'SQL'
                 UPDATE public.vendor_orders
                 SET
                     status = :new_status,
@@ -187,26 +193,79 @@ final class PdoVendorOrderRepository implements VendorOrderRepository
                 AND store_id = :store_id
                 AND status = :current_status
                 RETURNING *
-                SQL,
-            [
-                'new_status' => $newStatus,
-                'accepted_status' => $newStatus,
-                'shipped_status' => $newStatus,
-                'delivered_status' => $newStatus,
-                'completed_status' => $newStatus,
-                'tracking_number' => $trackingNumber,
-                'tracking_url' => $trackingUrl,
-                'vendor_order_id' => $vendorOrderId,
-                'store_id' => $storeId,
-                'current_status' => $currentStatus,
-                'acceptance_deadline_status' => $newStatus,
-                'acceptance_deadline' => $acceptanceDeadline,
-            ]
-        );
+            SQL,
+                [
+                    'new_status' => $newStatus,
+                    'accepted_status' => $newStatus,
+                    'shipped_status' => $newStatus,
+                    'delivered_status' => $newStatus,
+                    'completed_status' => $newStatus,
+                    'tracking_number' => $trackingNumber,
+                    'tracking_url' => $trackingUrl,
+                    'vendor_order_id' => $vendorOrderId,
+                    'store_id' => $storeId,
+                    'current_status' => $currentStatus,
+                    'acceptance_deadline_status' => $newStatus,
+                    'acceptance_deadline' => $acceptanceDeadline,
+                ]
+            );
 
-        $row = $result->fetch();
+            $row = $result->fetch();
 
-        return $row === false ? null : $row;
+            if ($row === false) {
+                $this->db->rollback();
+
+                return null;
+            }
+
+            if (
+                $currentStatus === 'pending'
+                && $newStatus === 'accepted'
+            ) {
+                $this->outboxEventPublisher->publish(
+                    EventTypes::VENDOR_ORDER_ACCEPTED->value,
+                    'vendor_order',
+                    $vendorOrderId,
+                    'vendor_order.accepted:' . $vendorOrderId,
+                    [
+                        'vendor_order_id' => $vendorOrderId,
+                        'order_id' => $row['order_id'],
+                        'store_id' => $storeId,
+                        'previous_status' => $currentStatus,
+                        'status' => $newStatus,
+                    ],
+                );
+            }
+
+            if (
+                $currentStatus === 'ready_to_ship'
+                && $newStatus === 'shipped'
+            ) {
+                $this->outboxEventPublisher->publish(
+                    EventTypes::VENDOR_ORDER_SHIPPED->value,
+                    'vendor_order',
+                    $vendorOrderId,
+                    'vendor_order.shipped:' . $vendorOrderId,
+                    [
+                        'vendor_order_id' => $vendorOrderId,
+                        'order_id' => $row['order_id'],
+                        'store_id' => $storeId,
+                        'previous_status' => $currentStatus,
+                        'status' => $newStatus,
+                        'tracking_number' => $row['tracking_number'] ?? null,
+                        'tracking_url' => $row['tracking_url'] ?? null,
+                    ],
+                );
+            }
+
+            $this->db->commit();
+
+            return $row;
+        } catch (Throwable $exception) {
+            $this->db->rollback();
+
+            throw $exception;
+        }
     }
 
     public function confirmCustomerDelivery(
@@ -466,6 +525,21 @@ final class PdoVendorOrderRepository implements VendorOrderRepository
                 ]
             );
 
+            $this->outboxEventPublisher->publish(
+                EventTypes::VENDOR_ORDER_COMPLETED->value,
+                'vendor_order',
+                $vendorOrderId,
+                EventTypes::VENDOR_ORDER_COMPLETED->value . ':' . $vendorOrderId,
+                [
+                    'vendor_order_id' => $vendorOrderId,
+                    'order_id' => $vendorOrder['order_id'],
+                    'store_id' => $vendorOrder['store_id'],
+                    'previous_status' => 'delivered',
+                    'status' => 'completed',
+                    'completion_source' => 'customer_confirmation',
+                ],
+            );
+
             /*
              * 9. Return the completed vendor order.
              */
@@ -723,6 +797,21 @@ final class PdoVendorOrderRepository implements VendorOrderRepository
                             'payable_status_before' => $payable['status'],
                         ], JSON_THROW_ON_ERROR),
                     ]
+                );
+
+                $this->outboxEventPublisher->publish(
+                    EventTypes::VENDOR_ORDER_COMPLETED->value,
+                    'vendor_order',
+                    $vendorOrderId,
+                    EventTypes::VENDOR_ORDER_COMPLETED->value . ':' . $vendorOrderId,
+                    [
+                        'vendor_order_id' => $vendorOrderId,
+                        'order_id' => $vendorOrder['order_id'],
+                        'store_id' => $vendorOrder['store_id'],
+                        'previous_status' => 'delivered',
+                        'status' => 'completed',
+                        'completion_source' => 'automatic_acceptance',
+                    ],
                 );
 
                 $completedCount++;
