@@ -6,6 +6,7 @@ namespace App\Bootstrap;
 
 use App\Bootstrap\Routes\ApiRoutes;
 use App\Modules\Notification\Infrastructure\Queue\FailedEmailTransport;
+use App\Modules\Payout\Infrastructure\Providers\PaystackPayoutProvider;
 use App\Modules\Product\Application\Services\ProductService;
 use App\Modules\Product\Domain\Repositories\ProductCategoryRepository;
 use App\Modules\Product\Domain\Repositories\ProductVariantRepository;
@@ -53,6 +54,8 @@ use App\Modules\Product\Infrastructure\Persistence\PdoCategoryRepository;
 use App\Modules\Cart\Application\Services\CartService;
 use App\Modules\Cart\Domain\Repositories\CartRepository;
 use App\Modules\Cart\Infrastructure\Persistence\PdoCartRepository;
+use App\Modules\Dispute\Application\Services\DisputeEvidenceAccessService;
+use App\Modules\Dispute\Application\Services\DisputeEvidenceService;
 use App\Modules\Order\Domain\Repositories\OrderRepository;
 use App\Modules\Order\Infrastructure\Persistence\PdoOrderRepository;
 use App\Modules\Order\Application\Services\CheckoutService;
@@ -107,6 +110,35 @@ use App\Modules\Notification\Infrastructure\Outbox\Handlers\PaymentFailedOutboxE
 use App\Modules\Notification\Infrastructure\Outbox\Handlers\PaymentSucceededOutboxEventHandler;
 use App\Modules\Notification\Application\Handlers\VendorOrderEmailHandler;
 use App\Modules\Notification\Infrastructure\Outbox\Handlers\VendorOrderStatusOutboxEventHandler;
+use App\Modules\Dispute\Domain\Contracts\DisputePayableManagerInterface;
+use App\Modules\Dispute\Domain\Contracts\DisputeTransactionManagerInterface;
+use App\Modules\Dispute\Domain\Contracts\DisputeVendorOrderAccessInterface;
+use App\Modules\Dispute\Infrastructure\Persistence\PdoDisputePayableManager;
+use App\Modules\Dispute\Infrastructure\Persistence\PdoDisputeTransactionManager;
+use App\Modules\Dispute\Infrastructure\Persistence\PdoDisputeVendorOrderAccess;
+use App\Modules\Dispute\Domain\Contracts\DisputeEvidenceStorageInterface;
+use App\Modules\Dispute\Domain\Contracts\DisputeRefundManagerInterface;
+use App\Modules\Dispute\Domain\Repositories\DisputeEvidenceRepositoryInterface;
+use App\Modules\Dispute\Domain\Repositories\DisputeHistoryRepositoryInterface;
+use App\Modules\Dispute\Domain\Repositories\DisputeRepositoryInterface;
+use App\Modules\Dispute\Infrastructure\Payments\PaymentServiceDisputeRefundManager;
+use App\Modules\Dispute\Infrastructure\Persistence\PdoDisputeEvidenceRepository;
+use App\Modules\Dispute\Infrastructure\Storage\LocalDisputeEvidenceStorage;
+use App\Modules\Payment\Application\Services\PaystackRefundWebhookService;
+use App\Modules\Payout\Application\Services\PayoutAccountService;
+use App\Modules\Payout\Application\Services\PayoutService;
+use App\Modules\Payout\Application\Services\PaystackTransferWebhookService;
+use App\Modules\Payout\Domain\Contracts\PayoutLedgerSettlementInterface;
+use App\Modules\Payout\Domain\Contracts\PayoutProviderInterface;
+use App\Modules\Payout\Domain\Repositories\PayoutRepositoryInterface;
+use App\Modules\Payout\Domain\Repositories\VendorDebtRepositoryInterface;
+use App\Modules\Payout\Domain\Repositories\VendorPayoutAccountRepositoryInterface;
+use App\Modules\Payout\Infrastructure\Ledger\LedgerPayoutSettlement;
+use App\Modules\Payout\Infrastructure\Persistence\PdoPayoutRepository;
+use App\Modules\Payout\Infrastructure\Persistence\PdoPayoutReservationRepository;
+use App\Modules\Payout\Infrastructure\Persistence\PdoVendorDebtRepository;
+use App\Modules\Payout\Infrastructure\Persistence\PdoVendorPayoutAccountRepository;
+use App\Modules\Payout\Infrastructure\Providers\MockPayoutProvider;
 use App\Shared\Enums\EventTypes;
 
 final class ApplicationFactory
@@ -761,6 +793,236 @@ final class ApplicationFactory
             },
         );
 
+        // Dispute Managers
+        $di->setShared(
+            DisputeTransactionManagerInterface::class,
+            function () use ($di) {
+                return new PdoDisputeTransactionManager($di->getShared('db'));
+            }
+        );
+
+        $di->setShared(
+            DisputePayableManagerInterface::class,
+            function () use ($di) {
+                return new PdoDisputePayableManager($di->getShared('db'));
+            }
+        );
+
+        $di->setShared(
+            DisputeVendorOrderAccessInterface::class,
+            function () use ($di) {
+                return new PdoDisputeVendorOrderAccess($di->getShared('db'));
+            }
+        );
+
+        // Dispute Evidence Storage
+        $di->setShared(
+            DisputeEvidenceStorageInterface::class,
+            function () {
+                $storageDirectory = getenv('DISPUTE_EVIDENCE_STORAGE_PATH');
+
+                if ($storageDirectory === false || trim($storageDirectory) === '') {
+                    throw new RuntimeException('DISPUTE_EVIDENCE_STORAGE_PATH is not configured.');
+                }
+
+                return new LocalDisputeEvidenceStorage($storageDirectory);
+            }
+        );
+
+        // Dispute Evidence Service
+        $di->setShared(
+            DisputeEvidenceService::class,
+            function () use ($di) {
+                return new DisputeEvidenceService(
+                    $di->getShared(DisputeRepositoryInterface::class),
+                    $di->getShared(DisputeEvidenceRepositoryInterface::class),
+                    $di->getShared(DisputeHistoryRepositoryInterface::class),
+                    $di->getShared(DisputeEvidenceStorageInterface::class),
+                    $di->getShared(DisputeTransactionManagerInterface::class),
+                );
+            }
+        );
+
+
+        $di->setShared(
+            DisputeEvidenceRepositoryInterface::class,
+            function () use ($di) {
+                return new PdoDisputeEvidenceRepository($di->getShared('db'));
+            }
+        );
+
+        $di->setShared(
+            DisputeEvidenceAccessService::class,
+            function () use ($di) {
+                return new DisputeEvidenceAccessService(
+                    $di->getShared(DisputeRepositoryInterface::class),
+                    $di->getShared(DisputeEvidenceRepositoryInterface::class),
+                    $di->getShared(DisputeHistoryRepositoryInterface::class),
+                    $di->getShared(DisputeEvidenceStorageInterface::class),
+                    $di->getShared(DisputeTransactionManagerInterface::class),
+                );
+            }
+        );
+
+        $di->setShared(DisputeRefundManagerInterface::class, function () use ($di) {
+            return new PaymentServiceDisputeRefundManager($di->getShared(PaymentService::class));
+        });
+
+        $di->setShared(
+            PaystackRefundWebhookService::class,
+            function () use ($di) {
+                return new PaystackRefundWebhookService(
+                    $di->getShared(PaymentRepository::class),
+                );
+            }
+        );
+
+        // Payout repository
+        $di->setShared(
+            PayoutRepositoryInterface::class,
+            function () use ($di): PayoutRepositoryInterface {
+                return new PdoPayoutRepository($di->getShared('db'));
+            }
+        );
+
+        // Vendor debt repository
+        $di->setShared(
+            VendorDebtRepositoryInterface::class,
+            function () use ($di): VendorDebtRepositoryInterface {
+                return new PdoVendorDebtRepository($di->getShared('db'));
+            }
+        );
+
+        // Payout reservation repository
+        $di->setShared(
+            PdoPayoutReservationRepository::class,
+            function () use ($di): PdoPayoutReservationRepository {
+                return new PdoPayoutReservationRepository(
+                    $di->getShared('db'),
+                    $di->getShared(VendorDebtRepositoryInterface::class),
+                );
+            }
+        );
+
+        // Payout ledger settlement adapter
+        $di->setShared(
+            PayoutLedgerSettlementInterface::class,
+            function () use ($di): PayoutLedgerSettlementInterface {
+                return new LedgerPayoutSettlement(
+                    $di->getShared(LedgerPostingService::class),
+                );
+            }
+        );
+
+        // Payout application service
+        $di->setShared(
+            PayoutService::class,
+            function () use ($di): PayoutService {
+                return new PayoutService(
+                    db: $di->getShared('db'),
+                    reservationRepository: $di->getShared(
+                        PdoPayoutReservationRepository::class
+                    ),
+                    vendorDebtRepository: $di->getShared(
+                        VendorDebtRepositoryInterface::class
+                    ),
+                    payoutProvider: $di->getShared(
+                        PayoutProviderInterface::class
+                    ),
+                    ledgerSettlement: $di->getShared(
+                        PayoutLedgerSettlementInterface::class
+                    ),
+                    storeAccessChecker: $di->getShared(
+                        StoreAccessCheckerInterface::class
+                    ),
+                );
+            }
+        );
+
+        // Paystack transfer webhook service
+        $di->setShared(
+            PaystackTransferWebhookService::class,
+            function () use ($di): PaystackTransferWebhookService {
+                return new PaystackTransferWebhookService(
+                    db: $di->getShared('db'),
+                    vendorDebtRepository: $di->getShared(
+                        VendorDebtRepositoryInterface::class
+                    ),
+                    ledgerSettlement: $di->getShared(
+                        PayoutLedgerSettlementInterface::class
+                    ),
+                );
+            }
+        );
+
+        // $di->setShared(
+        //     PayoutProviderInterface::class,
+        //     function (): PayoutProviderInterface {
+        //         $secretKey = getenv('PAYSTACK_SECRET_KEY') ?: ($_ENV['PAYSTACK_SECRET_KEY'] ?? '');
+
+        //         return new PaystackPayoutProvider((string) $secretKey);
+        //     }
+        // );
+
+        $di->setShared(
+            PayoutProviderInterface::class,
+            function () {
+                $providerName = trim((string) (
+                    $_ENV['PAYOUT_PROVIDER']
+                    ?? $_SERVER['PAYOUT_PROVIDER']
+                    ?? getenv('PAYOUT_PROVIDER')
+                    ?: 'paystack'
+                ));
+
+                $appEnvironment = strtolower(trim((string) (
+                    $_ENV['APP_ENV']
+                    ?? $_SERVER['APP_ENV']
+                    ?? getenv('APP_ENV')
+                    ?: ''
+                )));
+
+                if (strtolower($providerName) === 'mock') {
+                    if (
+                        !in_array($appEnvironment, ['local', 'development', 'testing'], true)
+                    ) {
+                        throw new RuntimeException(
+                            'The mock payout provider can only run in local, development, or testing environments.'
+                        );
+                    }
+
+                    return new MockPayoutProvider();
+                }
+
+                if (strtolower($providerName) !== 'paystack') {
+                    throw new RuntimeException(
+                        'Unsupported payout provider: ' . $providerName
+                    );
+                }
+
+                $secretKey = (string) (
+                    $_ENV['PAYSTACK_SECRET_KEY']
+                    ?? $_SERVER['PAYSTACK_SECRET_KEY']
+                    ?? getenv('PAYSTACK_SECRET_KEY')
+                    ?: ''
+                );
+
+                return new PaystackPayoutProvider($secretKey);
+            }
+        );
+
+        $di->setShared(
+            VendorPayoutAccountRepositoryInterface::class,
+            fn() => new PdoVendorPayoutAccountRepository($di->getShared('db'))
+        );
+
+        $di->setShared(
+            PayoutAccountService::class,
+            fn() => new PayoutAccountService(
+                payoutProvider: $di->getShared(PayoutProviderInterface::class),
+                storeAccessChecker: $di->getShared(StoreAccessCheckerInterface::class),
+                accountRepository: $di->getShared(VendorPayoutAccountRepositoryInterface::class)
+            )
+        );
 
         //Dispatcher Injection
         $di->setShared('dispatcher', function () use ($di): Dispatcher {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Vendor\Application\Services;
 
+use App\Modules\Payout\Domain\Exceptions\PayoutAccountAccessDeniedException;
 use App\Modules\Product\Application\Contracts\StoreAccessCheckerInterface;
 use App\Modules\Vendor\Domain\Repository\VendorOrderRepository;
 use InvalidArgumentException;
@@ -334,8 +335,8 @@ final class VendorOrderService
                 $storeId
             )
         ) {
-            throw new RuntimeException(
-                'You are not authorized to manage this store.'
+            throw new PayoutAccountAccessDeniedException(
+                'You are not authorized to manage payout accounts for this store.'
             );
         }
     }

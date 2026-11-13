@@ -40,4 +40,27 @@ interface PaymentProviderInterface
      * }
      */
     public function verifyPayment(string $reference): array;
+
+
+    /**
+     * Initiate a refund with the payment provider.
+     *
+     * @return array{
+     *     refund_reference: string,
+     *     transaction_reference: string,
+     *     amount: int,
+     *     currency: string,
+     *     status: string,
+     *     provider_response: array
+     * }
+     */
+    public function refundPayment(
+        string $transactionReference,
+        int $amountMinor,
+        string $currency,
+        string $refundReference,
+        string $customerNote,
+        string $merchantNote
+    ): array;
+
 }

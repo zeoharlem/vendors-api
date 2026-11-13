@@ -385,16 +385,24 @@ final class PdoPaymentRepository implements PaymentRepository
             }
 
             // Validate every reservation before modifying inventory.
+            // foreach ($reservations as $reservation) {
+            //     if (
+            //         $reservation['status'] !== 'reserved' || in_array(
+            //             $reservation['is_expired'],
+            //             [true, 1, '1', 't', 'true'],
+            //             true
+            //         )
+            //     ) {
+            //         throw new RuntimeException(
+            //             'An inventory reservation is no longer valid. '
+            //             . 'Payment requires reconciliation.'
+            //         );
+            //     }
+            // }
             foreach ($reservations as $reservation) {
-                if (
-                    $reservation['status'] !== 'reserved' || in_array(
-                        $reservation['is_expired'],
-                        [true, 1, '1', 't', 'true'],
-                        true
-                    )
-                ) {
+                if ($reservation['status'] !== 'reserved') {
                     throw new RuntimeException(
-                        'An inventory reservation is no longer valid. '
+                        'Inventory reservation is no longer available. '
                         . 'Payment requires reconciliation.'
                     );
                 }
@@ -426,6 +434,13 @@ final class PdoPaymentRepository implements PaymentRepository
                 if ($inventory === false) {
                     throw new RuntimeException(
                         'Inventory record not found for variant: ' . $variantId
+                    );
+                }
+
+                if ((int) $inventory['reserved_qty'] < $quantity) {
+                    throw new RuntimeException(
+                        'Reserved inventory quantity is insufficient for payment settlement. '
+                        . 'Payment requires reconciliation.'
                     );
                 }
 
@@ -782,6 +797,997 @@ final class PdoPaymentRepository implements PaymentRepository
         }
     }
 
+
+    /**
+     * Prepare a vendor-order refund and persist it before contacting the provider.
+     *
+     * A null amount means the full remaining refundable balance of the vendor order,
+     * capped by the remaining refundable balance of the original payment.
+     *
+     * @return array<string, mixed>
+     */
+    public function prepareRefund(
+        string $paymentReference,
+        string $vendorOrderId,
+        ?int $amountMinor,
+        string $providerReference,
+        string $idempotencyKey,
+        string $reason,
+        ?string $requestedBy
+    ): array {
+        $paymentReference = trim($paymentReference);
+        $vendorOrderId = trim($vendorOrderId);
+        $providerReference = trim($providerReference);
+        $idempotencyKey = trim($idempotencyKey);
+        $reason = trim($reason);
+
+        if (
+            $paymentReference === ''
+            || $vendorOrderId === ''
+            || $providerReference === ''
+            || $idempotencyKey === ''
+            || $reason === ''
+        ) {
+            throw new InvalidArgumentException(
+                'Payment reference, vendor order, provider reference, '
+                . 'idempotency key and refund reason are required.'
+            );
+        }
+
+        if ($amountMinor !== null && $amountMinor <= 0) {
+            throw new InvalidArgumentException(
+                'Refund amount must be greater than zero.'
+            );
+        }
+
+        if (strlen($idempotencyKey) > 128) {
+            throw new InvalidArgumentException(
+                'Refund idempotency key cannot exceed 128 characters.'
+            );
+        }
+
+        if (strlen($providerReference) > 150) {
+            throw new InvalidArgumentException(
+                'Provider refund reference cannot exceed 150 characters.'
+            );
+        }
+
+        $this->db->begin();
+
+        try {
+            /*
+             * Lock the payment first. This serializes refund preparation
+             * for all vendor orders belonging to the same payment.
+             */
+            $result = $this->db->query(
+                <<<'SQL'
+                    SELECT
+                        id,
+                        order_id,
+                        provider,
+                        reference,
+                        provider_transaction_id,
+                        amount_minor,
+                        currency,
+                        status
+                    FROM public.payments
+                    WHERE reference = :reference
+                    FOR UPDATE
+                SQL,
+                [
+                    'reference' => $paymentReference,
+                ]
+            );
+
+            $payment = $result->fetch();
+
+            if ($payment === false) {
+                throw new RuntimeException(
+                    'The original payment could not be found.'
+                );
+            }
+
+            if ($payment['status'] !== 'success') {
+                throw new RuntimeException(
+                    'Only successfully completed payments can be refunded.'
+                );
+            }
+
+            if (strtolower((string) $payment['provider']) !== 'paystack') {
+                throw new RuntimeException(
+                    'Refunds are currently supported only for Paystack payments.'
+                );
+            }
+
+            if (
+                !is_string($payment['provider_transaction_id'])
+                || trim($payment['provider_transaction_id']) === ''
+            ) {
+                throw new RuntimeException(
+                    'The original provider transaction ID is missing.'
+                );
+            }
+
+            /*
+             * Idempotency check.
+             *
+             * Return the existing refund when the same request is retried.
+             * Reject reuse of the key for a different refund request.
+             */
+            $result = $this->db->query(
+                <<<'SQL'
+                    SELECT
+                        r.*,
+                        p.reference AS payment_reference,
+                        p.provider_transaction_id,
+                        p.provider AS payment_provider
+                    FROM public.refunds r
+                    INNER JOIN public.payments p
+                        ON p.id = r.payment_id
+                    WHERE r.idempotency_key = :idempotency_key
+                    LIMIT 1
+                SQL,
+                [
+                    'idempotency_key' => $idempotencyKey,
+                ]
+            );
+
+            $existingRefund = $result->fetch();
+
+            if ($existingRefund !== false) {
+                $sameRequest =
+                    (string) $existingRefund['payment_id'] === (string) $payment['id']
+                    && (string) $existingRefund['vendor_order_id'] === $vendorOrderId
+                    && (string) $existingRefund['provider_reference'] === $providerReference
+                    && (string) $existingRefund['reason'] === $reason
+                    && (
+                        $existingRefund['requested_by'] === null
+                        ? $requestedBy === null
+                        : (string) $existingRefund['requested_by'] === $requestedBy
+                    )
+                    && (
+                        $amountMinor === null
+                        || (int) $existingRefund['amount_minor'] === $amountMinor
+                    );
+
+                if (!$sameRequest) {
+                    throw new RuntimeException(
+                        'The refund idempotency key has already been used '
+                        . 'for a different request.'
+                    );
+                }
+
+                $this->db->commit();
+
+                return $existingRefund;
+            }
+
+            /*
+             * Lock and validate the vendor order.
+             */
+            $result = $this->db->query(
+                <<<'SQL'
+                    SELECT
+                        id,
+                        order_id,
+                        total_minor,
+                        currency,
+                        status
+                    FROM public.vendor_orders
+                    WHERE id = :vendor_order_id
+                    FOR UPDATE
+                SQL,
+                [
+                    'vendor_order_id' => $vendorOrderId,
+                ]
+            );
+
+            $vendorOrder = $result->fetch();
+
+            if ($vendorOrder === false) {
+                throw new RuntimeException(
+                    'The vendor order could not be found.'
+                );
+            }
+
+            if (
+                (string) $vendorOrder['order_id']
+                !== (string) $payment['order_id']
+            ) {
+                throw new RuntimeException(
+                    'The vendor order does not belong to the original payment.'
+                );
+            }
+
+            if (
+                strtoupper((string) $vendorOrder['currency'])
+                !== strtoupper((string) $payment['currency'])
+            ) {
+                throw new RuntimeException(
+                    'The vendor order currency does not match the payment currency.'
+                );
+            }
+
+            if (
+                in_array(
+                    $vendorOrder['status'],
+                    ['cancelled', 'refunded'],
+                    true
+                )
+            ) {
+                throw new RuntimeException(
+                    'This vendor order is not eligible for a refund.'
+                );
+            }
+
+            /*
+             * Parent-order refunds cannot safely be allocated to individual
+             * vendor orders without an explicit allocation policy.
+             */
+            $result = $this->db->query(
+                <<<'SQL'
+                    SELECT COUNT(*) AS refund_count
+                    FROM public.refunds
+                    WHERE payment_id = :payment_id
+                    AND vendor_order_id IS NULL
+                    AND status IN ('pending', 'processing', 'success')
+                SQL,
+                [
+                    'payment_id' => $payment['id'],
+                ]
+            );
+
+            $parentRefunds = $result->fetch();
+
+            if (
+                $parentRefunds !== false
+                && (int) $parentRefunds['refund_count'] > 0
+            ) {
+                throw new RuntimeException(
+                    'A parent-order refund already exists. '
+                    . 'Vendor-specific refunds require refund allocation reconciliation.'
+                );
+            }
+
+            /*
+             * Calculate refunds already reserved or completed for this payment
+             * and this vendor order. Failed and cancelled refunds do not consume
+             * the refundable balance.
+             */
+            $result = $this->db->query(
+                <<<'SQL'
+                    SELECT
+                        COALESCE(
+                            SUM(amount_minor),
+                            0
+                        ) AS refunded_minor
+                    FROM public.refunds
+                    WHERE payment_id = :payment_id
+                    AND status IN ('pending', 'processing', 'success')
+                SQL,
+                [
+                    'payment_id' => $payment['id'],
+                ]
+            );
+
+            $paymentRefundTotals = $result->fetch();
+
+            $paymentRefundedMinor = (int) (
+                $paymentRefundTotals['refunded_minor'] ?? 0
+            );
+
+            $paymentRemainingMinor =
+                (int) $payment['amount_minor'] - $paymentRefundedMinor;
+
+            if ($paymentRemainingMinor <= 0) {
+                throw new RuntimeException(
+                    'The original payment has no remaining refundable balance.'
+                );
+            }
+
+            $result = $this->db->query(
+                <<<'SQL'
+                    SELECT
+                        COALESCE(
+                            SUM(amount_minor),
+                            0
+                        ) AS refunded_minor
+                    FROM public.refunds
+                    WHERE payment_id = :payment_id
+                    AND vendor_order_id = :vendor_order_id
+                    AND status IN ('pending', 'processing', 'success')
+                SQL,
+                [
+                    'payment_id' => $payment['id'],
+                    'vendor_order_id' => $vendorOrderId,
+                ]
+            );
+
+            $vendorRefundTotals = $result->fetch();
+
+            $vendorRefundedMinor = (int) (
+                $vendorRefundTotals['refunded_minor'] ?? 0
+            );
+
+            $vendorRemainingMinor =
+                (int) $vendorOrder['total_minor'] - $vendorRefundedMinor;
+
+            if ($vendorRemainingMinor <= 0) {
+                throw new RuntimeException(
+                    'The vendor order has no remaining refundable balance.'
+                );
+            }
+
+            $remainingRefundableMinor = min(
+                $paymentRemainingMinor,
+                $vendorRemainingMinor
+            );
+
+            $refundAmountMinor = $amountMinor ?? $remainingRefundableMinor;
+
+            if ($refundAmountMinor > $remainingRefundableMinor) {
+                throw new RuntimeException(
+                    sprintf(
+                        'Refund amount exceeds the remaining refundable balance of %d minor units.',
+                        $remainingRefundableMinor
+                    )
+                );
+            }
+
+            /*
+             * Create the durable refund record before contacting Paystack.
+             */
+            $result = $this->db->query(
+                <<<'SQL'
+                    INSERT INTO public.refunds (
+                        order_id,
+                        payment_id,
+                        vendor_order_id,
+                        provider,
+                        idempotency_key,
+                        provider_reference,
+                        amount_minor,
+                        currency,
+                        status,
+                        reason,
+                        requested_by,
+                        requested_at,
+                        created_at,
+                        updated_at
+                    ) VALUES (
+                        :order_id,
+                        :payment_id,
+                        :vendor_order_id,
+                        :provider,
+                        :idempotency_key,
+                        :provider_reference,
+                        :amount_minor,
+                        :currency,
+                        'pending',
+                        :reason,
+                        :requested_by,
+                        NOW(),
+                        NOW(),
+                        NOW()
+                    )
+                    RETURNING *
+                SQL,
+                [
+                    'order_id' => $payment['order_id'],
+                    'payment_id' => $payment['id'],
+                    'vendor_order_id' => $vendorOrderId,
+                    'provider' => $payment['provider'],
+                    'idempotency_key' => $idempotencyKey,
+                    'provider_reference' => $providerReference,
+                    'amount_minor' => $refundAmountMinor,
+                    'currency' => strtoupper((string) $payment['currency']),
+                    'reason' => mb_substr($reason, 0, 2000),
+                    'requested_by' => $requestedBy,
+                ]
+            );
+
+            $refund = $result->fetch();
+
+            if ($refund === false) {
+                throw new RuntimeException(
+                    'The refund record could not be created.'
+                );
+            }
+
+            /*
+             * Include the original transaction reference needed by Paystack.
+             */
+            $refund['payment_reference'] = $payment['reference'];
+            $refund['provider_transaction_id'] =
+                $payment['provider_transaction_id'];
+            $refund['payment_provider'] = $payment['provider'];
+
+            $this->db->commit();
+
+            return $refund;
+        } catch (Throwable $exception) {
+            $this->db->rollback();
+
+            throw $exception;
+        }
+    }
+
+    /**
+     * Mark a prepared refund as being submitted to the provider.
+     */
+    /**
+     * Mark a prepared refund as being submitted to the provider.
+     */
+    /**
+     * Atomically claim a pending refund for provider submission.
+     *
+     * Returns true only for the request that changes pending to processing.
+     */
+    public function markRefundProcessing(string $refundId): bool {
+        $result = $this->db->query(
+            <<<'SQL'
+                UPDATE public.refunds
+                SET
+                    status = 'processing',
+                    updated_at = NOW()
+                WHERE id = :refund_id
+                AND status = 'pending'
+                RETURNING id
+            SQL,
+            [
+                'refund_id' => $refundId,
+            ]
+        );
+
+        return $result->fetch() !== false;
+    }
+
+    /**
+     * Find a refund using its application idempotency key.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function findRefundByIdempotencyKey(
+        string $idempotencyKey
+    ): ?array {
+        $result = $this->db->query(
+            <<<'SQL'
+                SELECT *
+                FROM public.refunds
+                WHERE idempotency_key = :idempotency_key
+                LIMIT 1
+            SQL,
+            [
+                'idempotency_key' => $idempotencyKey,
+            ]
+        );
+
+        $refund = $result->fetch();
+
+        return $refund !== false ? $refund : null;
+    }
+
+    /**
+     * Persist the provider's refund response.
+     *
+     * Paystack's needs-attention status is mapped to processing because
+     * the current refunds table constraint does not include needs_attention.
+     *
+     * @param array<string, mixed> $providerResponse
+     * @return array<string, mixed>
+     */
+    public function updateRefundProviderResult(
+        string $refundId,
+        string $providerReference,
+        string $status,
+        array $providerResponse
+    ): array {
+        $refundId = trim($refundId);
+        $providerReference = trim($providerReference);
+        $status = strtolower(trim($status));
+
+        if ($refundId === '' || $providerReference === '') {
+            throw new InvalidArgumentException(
+                'Refund ID and provider reference are required.'
+            );
+        }
+
+        $status = match ($status) {
+            'processed' => 'success',
+            'needs-attention',
+            'needs_attention' => 'processing',
+            default => $status,
+        };
+
+        $allowedStatuses = [
+            'pending',
+            'processing',
+            'success',
+            'failed',
+            'cancelled',
+        ];
+
+        if (!in_array($status, $allowedStatuses, true)) {
+            throw new InvalidArgumentException(
+                'Unsupported provider refund status.'
+            );
+        }
+
+        $result = $this->db->query(
+            <<<'SQL'
+                UPDATE public.refunds
+                SET
+                    provider_reference = :provider_reference,
+                    status = :status,
+                    provider_response = CAST(:provider_response AS JSONB),
+                    processed_at = CASE
+                        WHEN :is_terminal = TRUE THEN COALESCE(processed_at, NOW())
+                        ELSE processed_at
+                    END,
+                    confirmed_at = CASE
+                        WHEN :is_success = TRUE THEN COALESCE(confirmed_at, NOW())
+                        ELSE confirmed_at
+                    END,
+                    updated_at = NOW()
+                WHERE id = :refund_id
+                AND status <> 'success'
+                RETURNING *
+            SQL,
+            [
+                'provider_reference' => $providerReference,
+                'status' => $status,
+                'provider_response' => $this->encodeJson($providerResponse),
+                'is_terminal' => in_array(
+                    $status,
+                    ['success', 'failed', 'cancelled'],
+                    true
+                ),
+                'is_success' => $status === 'success',
+                'refund_id' => $refundId,
+            ]
+        );
+
+        $refund = $result->fetch();
+
+        if ($refund !== false) {
+            return $refund;
+        }
+
+        /*
+         * A successful refund is immutable here: a late pending or failed
+         * notification must not downgrade it.
+         */
+        $result = $this->db->query(
+            <<<'SQL'
+                SELECT *
+                FROM public.refunds
+                WHERE id = :refund_id
+                LIMIT 1
+            SQL,
+            [
+                'refund_id' => $refundId,
+            ]
+        );
+
+        $existingRefund = $result->fetch();
+
+        if ($existingRefund === false) {
+            throw new RuntimeException(
+                'The refund record could not be found.'
+            );
+        }
+
+        if ($existingRefund['status'] === 'success') {
+            return $existingRefund;
+        }
+
+        throw new RuntimeException(
+            'The refund provider response could not be persisted.'
+        );
+    }
+
+    /**
+     * Retrieve the idempotency key belonging to a refund.
+     */
+    private function findRefundIdempotencyKey(
+        string $refundId
+    ): string {
+        $result = $this->db->query(
+            <<<'SQL'
+        SELECT idempotency_key
+        FROM public.refunds
+        WHERE id = :refund_id
+        LIMIT 1
+        SQL,
+            [
+                'refund_id' => $refundId,
+            ]
+        );
+
+        $row = $result->fetch();
+
+        if ($row === false) {
+            throw new RuntimeException(
+                'The refund record could not be found.'
+            );
+        }
+
+        return (string) $row['idempotency_key'];
+    }
+
+    public function findSuccessfulPaymentReferenceForVendorOrder(
+        string $vendorOrderId,
+    ): ?string {
+        $result = $this->db->query(
+            <<<'SQL'
+                SELECT p.reference
+                FROM public.vendor_orders vo
+                INNER JOIN public.payments p
+                    ON p.order_id = vo.order_id
+                WHERE vo.id = :vendor_order_id
+                AND p.status = 'success'
+                ORDER BY p.created_at DESC
+                LIMIT 1
+            SQL,
+            [
+                'vendor_order_id' => $vendorOrderId,
+            ]
+        );
+
+        $row = $result->fetch();
+
+        if ($row === false) {
+            return null;
+        }
+
+        return (string) $row['reference'];
+    }
+
+    public function findRefundForWebhook(
+        ?string $providerReference,
+        string $transactionReference,
+        int $amountMinor,
+        string $currency
+    ): ?array {
+        $transactionReference = trim($transactionReference);
+        $providerReference = $providerReference !== null
+            ? trim($providerReference)
+            : null;
+        $currency = strtoupper(trim($currency));
+
+        if (
+            $transactionReference === ''
+            || $amountMinor <= 0
+            || $currency === ''
+        ) {
+            throw new InvalidArgumentException(
+                'Invalid refund webhook matching parameters.'
+            );
+        }
+
+        if ($providerReference !== null && $providerReference !== '') {
+            $result = $this->db->query(
+                <<<'SQL'
+                    SELECT r.*
+                    FROM public.refunds r
+                    INNER JOIN public.payments p
+                        ON p.id = r.payment_id
+                    WHERE r.provider = 'paystack'
+                    AND r.provider_reference = :provider_reference
+                    AND p.provider_transaction_id = :transaction_reference
+                    AND r.amount_minor = :amount_minor
+                    AND UPPER(r.currency) = :currency
+                    LIMIT 2
+                SQL,
+                [
+                    'provider_reference' => $providerReference,
+                    'transaction_reference' => $transactionReference,
+                    'amount_minor' => $amountMinor,
+                    'currency' => $currency,
+                ]
+            );
+        } else {
+            /*
+             * Paystack may omit refund_reference in early refund events.
+             * In that case, only accept an unambiguous match.
+             */
+            $result = $this->db->query(
+                <<<'SQL'
+                    SELECT r.*
+                    FROM public.refunds r
+                    INNER JOIN public.payments p
+                        ON p.id = r.payment_id
+                    WHERE r.provider = 'paystack'
+                    AND p.provider_transaction_id = :transaction_reference
+                    AND r.amount_minor = :amount_minor
+                    AND UPPER(r.currency) = :currency
+                    ORDER BY r.created_at DESC
+                    LIMIT 2
+                SQL,
+                [
+                    'transaction_reference' => $transactionReference,
+                    'amount_minor' => $amountMinor,
+                    'currency' => $currency,
+                ]
+            );
+        }
+
+        $rows = $result->fetchAll();
+
+        if (count($rows) === 0) {
+            return null;
+        }
+
+        if (count($rows) > 1) {
+            throw new RuntimeException(
+                'The Paystack refund webhook matches multiple internal refunds.'
+            );
+        }
+
+        return $rows[0];
+    }
+
+    public function updateRefundWebhookStatus(
+        string $refundId,
+        ?string $providerReference,
+        string $status,
+        array $providerResponse
+    ): array {
+        $allowedStatuses = [
+            'pending',
+            'processing',
+            'needs_attention',
+            'failed',
+        ];
+
+        if (!in_array($status, $allowedStatuses, true)) {
+            throw new InvalidArgumentException(
+                'Unsupported non-success refund webhook status.'
+            );
+        }
+
+        $this->db->begin();
+
+        try {
+            $result = $this->db->query(
+                <<<'SQL'
+            SELECT *
+            FROM public.refunds
+            WHERE id = :refund_id
+            FOR UPDATE
+            SQL,
+                [
+                    'refund_id' => $refundId,
+                ]
+            );
+
+            $refund = $result->fetch();
+
+            if ($refund === false) {
+                throw new RuntimeException('Refund record was not found.');
+            }
+
+            $existingReference = $refund['provider_reference'] !== null
+                ? (string) $refund['provider_reference']
+                : null;
+
+            if (
+                $providerReference !== null
+                && $existingReference !== null
+                && $existingReference !== $providerReference
+            ) {
+                throw new RuntimeException(
+                    'Paystack refund reference does not match the stored refund reference.'
+                );
+            }
+
+            $currentStatus = (string) $refund['status'];
+
+            // Successful and cancelled refunds are immutable here.
+            // Failed refunds require manual reconciliation before any retry.
+            if (in_array($currentStatus, ['success', 'cancelled', 'failed'], true)) {
+                $this->db->commit();
+
+                return $refund;
+            }
+
+            $allowedTransitions = [
+                'pending' => ['pending', 'processing', 'needs_attention', 'failed'],
+                'processing' => ['processing', 'needs_attention', 'failed'],
+                'needs_attention' => ['needs_attention', 'processing', 'failed'],
+            ];
+
+            if (
+                !in_array(
+                    $status,
+                    $allowedTransitions[$currentStatus] ?? [],
+                    true
+                )
+            ) {
+                // Ignore stale/out-of-order provider events.
+                $this->db->commit();
+
+                return $refund;
+            }
+
+            $result = $this->db->query(
+                <<<'SQL'
+            UPDATE public.refunds
+            SET
+                provider_reference = COALESCE(provider_reference, :provider_reference),
+                status = :status,
+                provider_response = CAST(:provider_response AS JSONB),
+                updated_at = NOW()
+            WHERE id = :refund_id
+            RETURNING *
+            SQL,
+                [
+                    'refund_id' => $refundId,
+                    'provider_reference' => $providerReference,
+                    'status' => $status,
+                    'provider_response' => json_encode(
+                        $providerResponse,
+                        JSON_THROW_ON_ERROR
+                    ),
+                ]
+            );
+
+            $updatedRefund = $result->fetch();
+
+            if ($updatedRefund === false) {
+                throw new RuntimeException('Failed to update refund webhook status.');
+            }
+
+            $this->db->commit();
+
+            return $updatedRefund;
+        } catch (Throwable $exception) {
+            try {
+                $this->db->rollback();
+            } catch (Throwable) {
+                // Preserve the original exception.
+            }
+
+            throw $exception;
+        }
+    }
+
+    public function applyRefundWebhookUpdate(
+        string $refundId,
+        ?string $providerReference,
+        string $status,
+        array $providerResponse
+    ): array {
+        $allowedStatuses = [
+            'pending',
+            'processing',
+            'needs_attention',
+            'failed',
+        ];
+
+        if (!in_array($status, $allowedStatuses, true)) {
+            throw new InvalidArgumentException(
+                'Unsupported non-settlement refund status.'
+            );
+        }
+
+        $providerReference = $providerReference !== null
+            ? trim($providerReference)
+            : null;
+
+        $encodedResponse = json_encode(
+            $providerResponse,
+            JSON_THROW_ON_ERROR
+        );
+
+        $this->db->begin();
+
+        try {
+            $result = $this->db->query(
+                <<<'SQL'
+            SELECT *
+            FROM public.refunds
+            WHERE id = :refund_id
+            FOR UPDATE
+            SQL,
+                [
+                    'refund_id' => $refundId,
+                ]
+            );
+
+            $refund = $result->fetch();
+
+            if ($refund === false) {
+                throw new RuntimeException(
+                    'The internal refund record could not be found.'
+                );
+            }
+
+            $currentStatus = (string) $refund['status'];
+
+            /*
+             * Successful and cancelled refunds are terminal here.
+             * Successful refunds are handled by the financial settlement
+             * workflow, not this status-only update.
+             */
+            if (in_array($currentStatus, ['success', 'cancelled'], true)) {
+                $this->db->commit();
+
+                return $refund;
+            }
+
+            /*
+             * Failed is terminal for this webhook status-only workflow.
+             * A later contradictory provider event requires reconciliation.
+             */
+            if (
+                $currentStatus === 'failed'
+                && $status !== 'failed'
+            ) {
+                $this->db->commit();
+
+                return $refund;
+            }
+
+            /*
+             * Do not allow an older event to downgrade the current state.
+             */
+            $rank = [
+                'pending' => 0,
+                'processing' => 1,
+                'needs_attention' => 2,
+                'failed' => 3,
+            ];
+
+            if ($rank[$status] < $rank[$currentStatus]) {
+                $this->db->commit();
+
+                return $refund;
+            }
+
+            $result = $this->db->query(
+                <<<'SQL'
+            UPDATE public.refunds
+            SET
+                status = :status,
+                provider_reference = COALESCE(
+                    provider_reference,
+                    :provider_reference
+                ),
+                provider_response = CAST(:provider_response AS JSONB),
+                updated_at = NOW()
+            WHERE id = :refund_id
+            RETURNING *
+            SQL,
+                [
+                    'status' => $status,
+                    'provider_reference' => $providerReference,
+                    'provider_response' => $encodedResponse,
+                    'refund_id' => $refundId,
+                ]
+            );
+
+            $updatedRefund = $result->fetch();
+
+            if ($updatedRefund === false) {
+                throw new RuntimeException(
+                    'The refund webhook update could not be persisted.'
+                );
+            }
+
+            $this->db->commit();
+
+            return $updatedRefund;
+        } catch (Throwable $exception) {
+            try {
+                $this->db->rollback();
+            } catch (Throwable) {
+                // Preserve the original exception.
+            }
+
+            throw $exception;
+        }
+    }
 
     private function assertPaymentUpdated(
         string $reference,

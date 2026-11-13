@@ -15,6 +15,8 @@ use App\Modules\Product\Presentation\AdminCategoryRoutes;
 use App\Modules\Product\Presentation\VendorProductRoutes;
 use App\Modules\Cart\Presentation\Routes\CartRoutes;
 use App\Modules\Order\Presentation\Routes\OrderRoute;
+use App\Modules\Payout\Presentation\Routes\PayoutAccountRoutes;
+use App\Modules\Payout\Presentation\Routes\PayoutRoutes;
 use App\Modules\Vendor\Presentation\Routes\VendorOrderRoutes;
 
 final class ApiRoutes {
@@ -38,6 +40,8 @@ final class ApiRoutes {
         PaymentRoutes::register($api);
         VendorRoutes::register($api);
         VendorOrderRoutes::register($api);
+        PayoutAccountRoutes::register($api);
+        PayoutRoutes::register($api);
 
         $router->mount($api);
     }

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Payment\Presentation\Controllers;
 
+use App\Modules\Payment\Application\Services\PaystackRefundWebhookService;
+use App\Modules\Payout\Application\Services\PaystackTransferWebhookService;
 use JsonException;
 use RuntimeException;
 use Throwable;
@@ -124,38 +126,56 @@ final class PaymentWebhookController extends \Phalcon\Mvc\Controller
                 );
             }
 
-            // 8. Ignore other event types safely.
-            if ($eventType !== 'charge.success') {
+            // 8. Process refund events.
+            if (str_starts_with($eventType, 'refund.')) {
+                $refundWebhookService = $this->di->getShared(
+                    PaystackRefundWebhookService::class
+                );
+
+                $refundWebhookService->handle($payload);
+
+                $paymentEventRepository->markProcessed((string) $event['id']);
+
+                return $this->jsonResponder->success(
+                    [
+                        'received' => true,
+                        'processed' => true,
+                    ]
+                );
+            }
+
+            // 9. Process payout transfer events.
+            if (str_starts_with($eventType, 'transfer.')) {
+                $transferWebhookService = $this->di->getShared(
+                    PaystackTransferWebhookService::class
+                );
+
+                $transferResult = $transferWebhookService->handle($payload);
+
                 $paymentEventRepository->markProcessed(
-                    (string) $event['id']
+                    provider: 'paystack',
+                    providerEventId: $eventId
                 );
 
-                return $this->jsonResponder->success([
-                    'received' => true,
-                ]);
-            }
-
-            if ($reference === '') {
-                throw new RuntimeException(
-                    'Paystack charge.success event has no payment reference.'
-                );
-            }
-
-            // 9. Independently verify the transaction with Paystack.
-            $paymentService = $this->di->getShared('paymentService');
-
-            $verifiedPayment = $paymentService->verify($reference);
-
-            if (($verifiedPayment['status'] ?? null) !== 'success') {
-                throw new RuntimeException(
-                    'Paystack transaction has not been confirmed as successful.'
+                return $this->jsonResponder->success(
+                    [
+                        'received' => true,
+                        'processed' => true,
+                        'transfer' => $transferResult,
+                    ]
                 );
             }
 
-            // 10. Mark the webhook event as processed.
-            $paymentEventRepository->markProcessed(
-                (string) $event['id']
-            );
+            // 10. Ignore unrelated event types.
+            if ($eventType !== 'charge.success') {
+                $paymentEventRepository->markProcessed((string) $event['id']);
+
+                return $this->jsonResponder->success(
+                    [
+                        'received' => true,
+                    ]
+                );
+            }
 
             return $this->jsonResponder->success(
                 [
@@ -172,9 +192,7 @@ final class PaymentWebhookController extends \Phalcon\Mvc\Controller
 
             if ($eventId !== null) {
                 try {
-                    $paymentEventRepository = $this->di->getShared(
-                        'paymentEventRepository'
-                    );
+                    $paymentEventRepository = $this->di->getShared('paymentEventRepository');
 
                     $event = $paymentEventRepository->findByProviderEventId(
                         provider: 'paystack',

@@ -66,7 +66,13 @@ final class AclFactory
         ],
         'notification' => ['view','mark_read'],
         'cart' => ['view', 'manage'],
-        'products' => ['view', 'create', 'update', 'delete'],
+        'products' => [
+            'view',
+            'create',
+            'update',
+            'delete',
+            'manage_status',
+        ],
         'category' => [
             'view',
             'create',
@@ -92,6 +98,7 @@ final class AclFactory
         ],
         'customers' => ['view', 'manage'],
         'reports' => ['view'],
+        'payout_accounts' => ['view','manage'],
     ];
 
     
@@ -146,6 +153,7 @@ final class AclFactory
             'orders' => ['view_own', 'update_fulfillment'],
             'notification' => ['view', 'mark_read'],
             'vendor_orders' => ['view','manage'],
+            'payout_accounts' => ['view', 'manage'],
         ],
 
         'support' => [

@@ -255,6 +255,54 @@ final readonly class ProductService
         return $product;
     }
 
+    public function approveAndPublish(string $productId): Product
+    {
+        $this->assertNonEmpty($productId, 'Product ID');
+
+        $product = $this->productRepository->findById($productId);
+
+        if ($product === null) {
+            throw new ProductNotFoundException('Product not found.');
+        }
+
+        if ($product->status === ProductStatus::ARCHIVED) {
+            throw new DomainException('Archived products cannot be published.');
+        }
+
+        if ($product->moderationStatus === ProductModerationStatus::REJECTED) {
+            throw new DomainException(
+                'Rejected products cannot be published. The vendor must update the product first.'
+            );
+        }
+
+        if (
+            $product->moderationStatus === ProductModerationStatus::APPROVED
+            && $product->status === ProductStatus::PUBLISHED
+        ) {
+            return $product;
+        }
+
+        $now = new DateTimeImmutable();
+
+        $approvedProduct = new Product(
+            id: $product->id,
+            storeId: $product->storeId,
+            categoryId: $product->categoryId,
+            name: $product->name,
+            slug: $product->slug,
+            description: $product->description,
+            status: $product->status,
+            moderationStatus: ProductModerationStatus::APPROVED,
+            publishedAt: $product->publishedAt,
+            createdAt: $product->createdAt,
+            updatedAt: $now,
+        );
+
+        return $this->productRepository->update(
+            $approvedProduct->publish($now)
+        );
+    }
+
 
     public function getManagedById(
         string $authenticatedUserId,

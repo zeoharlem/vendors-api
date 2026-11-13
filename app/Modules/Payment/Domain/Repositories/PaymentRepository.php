@@ -72,4 +72,73 @@ interface PaymentRepository
         string $failureReason,
         array $providerResponse = []
     ): array;
+
+    /**
+     * Create a durable refund record.
+     *
+     * The repository must:
+     * - Lock the successful payment and relevant order records.
+     * - Verify that the vendor order belongs to the payment's order.
+     * - Calculate the remaining refundable amount when amountMinor is null.
+     * - Prevent aggregate refunds from exceeding the original payment amount.
+     * - Enforce the vendor-order refundable limit.
+     * - Enforce idempotency.
+     *
+     * @return array<string, mixed>
+     */
+    public function prepareRefund(
+        string $paymentReference,
+        string $vendorOrderId,
+        ?int $amountMinor,
+        string $providerReference,
+        string $idempotencyKey,
+        string $reason,
+        ?string $requestedBy
+    ): array;
+
+    /**
+     * Mark a refund as being submitted to the provider.
+     */
+    public function markRefundProcessing(string $refundId): bool;
+
+    /**
+     * Retrieve a refund using its application idempotency key.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function findRefundByIdempotencyKey(
+        string $idempotencyKey
+    ): ?array;
+
+    /**
+     * Persist the provider's refund response.
+     *
+     * Supported statuses must match the refunds table constraint.
+     *
+     * @param array<string, mixed> $providerResponse
+     */
+    public function updateRefundProviderResult(
+        string $refundId,
+        string $providerReference,
+        string $status,
+        array $providerResponse
+    ): array;
+
+    public function findSuccessfulPaymentReferenceForVendorOrder(
+        string $vendorOrderId,
+    ): ?string;
+
+    public function findRefundForWebhook(
+        ?string $providerReference,
+        string $transactionReference,
+        int $amountMinor,
+        string $currency
+    ): ?array;
+
+    public function applyRefundWebhookUpdate(
+        string $refundId,
+        string $providerReference,
+        string $status,
+        array $providerResponse
+    ): array;
 }

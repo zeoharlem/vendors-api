@@ -31,4 +31,6 @@ interface PaymentEventRepository
         string $provider,
         string $providerEventId
     ): ?array;
+
+    public function claimForProcessing(string $eventId): bool;
 }

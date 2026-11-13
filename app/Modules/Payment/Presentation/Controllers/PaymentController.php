@@ -38,7 +38,7 @@ final class PaymentController extends \Phalcon\Mvc\Controller
 
             $paymentService = $this->di->getShared('paymentService');
 
-            $payment = $paymentService->initialize(customerId: $customerId,dto: $dto);
+            $payment = $paymentService->initialize(customerId: $customerId, dto: $dto);
 
             return $this->jsonResponder->success($payment);
         } catch (InvalidArgumentException $exception) {
@@ -117,5 +117,36 @@ final class PaymentController extends \Phalcon\Mvc\Controller
                 500
             );
         }
+    }
+
+    /**
+     * Verify a payment.
+     *
+     * @return mixed
+     */
+    public function verifyAction(): mixed
+    {
+        $customerId = (string) $this->dispatcher->getParameter('userAuthId');
+
+        $reference = (string) $this->dispatcher->getParameter('reference', '');
+
+        if ($reference === '') {
+            return $this->showAction();
+        }
+
+        $paymentService = $this->di->getShared('paymentService');
+
+        // Ensure the payment belongs to the authenticated customer.
+        $payment = $paymentService->getPayment($customerId, $reference);
+
+        if ($payment === null) {
+            return $this->showAction();
+        }
+
+        // Reuse the existing verification and payment lifecycle.
+        $paymentService->verify($reference);
+
+        // Return the refreshed payment using the existing response format.
+        return $this->showAction();
     }
 }
