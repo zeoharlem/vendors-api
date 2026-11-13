@@ -33,6 +33,14 @@ final class AuthorizationMiddleware
             'publish' => ['products', 'manage_status'],
         ],
 
+        'productimage' => [
+            'upload' => ['products', 'update'],
+            'index' => ['products', 'view'],
+            'update' => ['products', 'update'],
+            'delete' => ['products', 'delete'],
+            'replace' => ['products', 'update'],
+        ],
+
         'vendor' => [
             'createprofile' => ['vendors', 'apply'],
             'me' => ['vendors', 'view'],
@@ -197,6 +205,9 @@ final class AuthorizationMiddleware
             ],
             'paymentwebhook' => [
                 'paystack',
+            ],
+            'productimage' => [
+                'file',
             ],
         ];
 

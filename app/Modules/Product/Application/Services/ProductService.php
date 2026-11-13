@@ -23,6 +23,7 @@ use App\Modules\Product\Domain\Repositories\InventoryMovementRepository;
 use App\Modules\Product\Domain\Repositories\InventoryRepository;
 use App\Modules\Product\Domain\Repositories\ProductCategoryRepository;
 use App\Modules\Product\Domain\Repositories\ProductVariantRepository;
+use App\Modules\Product\Domain\Repositories\ProductMediaRepository;
 
 final readonly class ProductService
 {
@@ -33,6 +34,7 @@ final readonly class ProductService
         private InventoryRepository $inventoryRepository,
         private InventoryMovementRepository $inventoryMovementRepository,
         private ProductCategoryRepository $productCategoryRepository,
+        private ProductMediaRepository $productMediaRepository,
         private AdapterInterface $db,
     ) {
     }
@@ -362,6 +364,11 @@ final readonly class ProductService
         return $this->productRepository->update(
             $product->archive(new DateTimeImmutable())
         );
+    }
+
+    public function getImages(string $productId): array
+    {
+        return $this->productMediaRepository->findByProductId($productId);
     }
 
     private function assertNonEmpty(

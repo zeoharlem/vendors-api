@@ -80,6 +80,9 @@ final class JwtAuthMiddleware
             'paymentwebhook' => [
                 'paystack',
             ],
+            'productimage' => [
+                'file',
+            ],
         ];
 
         return in_array($action, $publicRoutes[$controller] ?? [], true);

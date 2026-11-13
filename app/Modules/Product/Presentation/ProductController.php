@@ -9,6 +9,7 @@ use App\Modules\Product\Application\Dtos\UpdateProductDto;
 use App\Modules\Product\Application\Exceptions\ProductNotFoundException;
 use App\Modules\Product\Application\Services\ProductService;
 use App\Modules\Product\Domain\Entities\Product;
+use App\Modules\Product\Domain\Entities\ProductMedia;
 use App\Shared\Http\AuthenticationRequiredException;
 use DateTimeInterface;
 use DomainException;
@@ -353,6 +354,19 @@ final class ProductController extends Controller
             'published_at' => $this->formatDate($product->publishedAt),
             'created_at' => $this->formatDate($product->createdAt),
             'updated_at' => $this->formatDate($product->updatedAt),
+            'images' => array_map(
+                fn(ProductMedia $image): array => [
+                    'id' => $image->id,
+                    'url' => sprintf(
+                        '/api/v1/products/%s/images/%s/file',
+                        rawurlencode($product->id),
+                        rawurlencode($image->id)
+                    ),
+                    'alt_text' => $image->altText,
+                    'sort_order' => $image->sortOrder,
+                ],
+                $this->productService()->getImages($product->id)
+            ),
         ];
     }
 

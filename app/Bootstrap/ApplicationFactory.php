@@ -140,6 +140,13 @@ use App\Modules\Payout\Infrastructure\Persistence\PdoVendorDebtRepository;
 use App\Modules\Payout\Infrastructure\Persistence\PdoVendorPayoutAccountRepository;
 use App\Modules\Payout\Infrastructure\Providers\MockPayoutProvider;
 use App\Shared\Enums\EventTypes;
+use App\Modules\Product\Application\Contracts\ProductImageProcessorInterface;
+use App\Modules\Product\Application\Contracts\ProductImageStorageInterface;
+use App\Modules\Product\Application\Services\ProductImageService;
+use App\Modules\Product\Infrastructure\Images\GdProductImageProcessor;
+use App\Modules\Product\Infrastructure\Storage\LocalProductImageStorage;
+use App\Modules\Product\Infrastructure\Persistence\PdoProductMediaRepository;
+use App\Modules\Product\Domain\Repositories\ProductMediaRepository;
 
 final class ApplicationFactory
 {
@@ -384,6 +391,7 @@ final class ApplicationFactory
                 $di->getShared('inventoryRepository'),
                 $di->getShared('inventoryMovementRepository'),
                 $di->getShared('productCategoryRepository'),
+                $di->getShared('productMediaRepository'),
                 $di->getShared('db'),
             )
         );
@@ -1021,6 +1029,38 @@ final class ApplicationFactory
                 payoutProvider: $di->getShared(PayoutProviderInterface::class),
                 storeAccessChecker: $di->getShared(StoreAccessCheckerInterface::class),
                 accountRepository: $di->getShared(VendorPayoutAccountRepositoryInterface::class)
+            )
+        );
+
+        // Product Media Repository
+        $di->setShared(
+            'productMediaRepository',
+            fn(): ProductMediaRepository => new PdoProductMediaRepository(
+                $di->getShared('db')
+            )
+        );
+
+        $di->setShared(
+            ProductImageProcessorInterface::class,
+            fn(): ProductImageProcessorInterface => new GdProductImageProcessor()
+        );
+
+        $di->setShared(
+            ProductImageStorageInterface::class,
+            fn(): ProductImageStorageInterface => new LocalProductImageStorage(
+                $root . '/storage'
+            )
+        );
+
+        $di->setShared(
+            'productImageService',
+            fn(): ProductImageService => new ProductImageService(
+                $di->getShared('productRepository'),
+                $di->getShared('productMediaRepository'),
+                $di->getShared(StoreAccessCheckerInterface::class),
+                $di->getShared(ProductImageProcessorInterface::class),
+                $di->getShared(ProductImageStorageInterface::class),
+                $di->getShared('db')
             )
         );
 

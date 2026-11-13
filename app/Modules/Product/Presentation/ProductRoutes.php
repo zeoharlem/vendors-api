@@ -59,5 +59,41 @@ final class ProductRoutes
             'controller' => 'Product',
             'action' => 'publish',
         ]);
+
+        $api->addPost('/products/{id}/images', [
+            'namespace' => $namespace,
+            'controller' => 'ProductImage',
+            'action' => 'upload',
+        ]);
+
+        $api->addGet('/products/{id}/images', [
+            'namespace' => $namespace,
+            'controller' => 'ProductImage',
+            'action' => 'index',
+        ]);
+
+        $api->addPatch('/products/{id}/images/{imageId}', [
+            'namespace' => $namespace,
+            'controller' => 'ProductImage',
+            'action' => 'update',
+        ]);
+
+        $api->addDelete('/products/{id}/images/{imageId}', [
+            'namespace' => $namespace,
+            'controller' => 'ProductImage',
+            'action' => 'delete',
+        ]);
+
+        $api->addGet('/products/{id}/images/{imageId}/file', [
+            'namespace' => $namespace,
+            'controller' => 'ProductImage',
+            'action' => 'file',
+        ]);
+
+        $api->addPost('/products/{id}/images/{imageId}/replace', [
+            'namespace' => $namespace,
+            'controller' => 'ProductImage',
+            'action' => 'replace',
+        ]);
     }
 }
