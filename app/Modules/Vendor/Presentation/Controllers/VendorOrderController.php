@@ -22,10 +22,10 @@ final class VendorOrderController extends Controller
 
     private function authenticatedUserId(): string
     {
-        $userId = (string) $this->dispatcher->getParam('userAuthId');
+        $userId = (string) $this->dispatcher->getParameter('userAuthId');
 
         if ($userId === '') {
-            throw new \RuntimeException(
+            throw new RuntimeException(
                 'Authenticated user could not be resolved.'
             );
         }

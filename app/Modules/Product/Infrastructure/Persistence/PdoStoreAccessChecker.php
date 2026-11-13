@@ -31,7 +31,8 @@ final readonly class PdoStoreAccessChecker implements StoreAccessCheckerInterfac
             'store_id' => $storeId,
             'user_id' => $userId,
         ]);
-        return $result !== false && $result !== [];
+        return $result !== false && $result->fetch() !== false;
+        //return $result !== false && $result !== [];
         //return $result->fetch(Enum::FETCH_ASSOC) !== false;
     }
 }

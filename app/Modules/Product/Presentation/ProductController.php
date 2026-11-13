@@ -62,7 +62,7 @@ final class ProductController extends Controller
 
             return $this->jsonResponder->error(
                 'INTERNAL_SERVER_ERROR',
-                'Unable to create product.',
+                'Unable to create product.'.$e->getMessage(),
                 500
             );
         }
@@ -224,6 +224,51 @@ final class ProductController extends Controller
         }
     }
 
+    public function publishAction()
+    {
+        try {
+            // AuthorizationMiddleware must enforce products.manage_status.
+            $productId = (string) $this->dispatcher->getParameter('id');
+
+            if (trim($productId) === '') {
+                throw new InvalidArgumentException('Product ID is required.');
+            }
+
+            $product = $this->productService()->approveAndPublish($productId);
+
+            return $this->jsonResponder->success([
+                'message' => 'Product approved and published successfully.',
+                'product' => $this->serializeProduct($product),
+            ]);
+        } catch (InvalidArgumentException $e) {
+            return $this->jsonResponder->error(
+                'BAD_REQUEST',
+                $e->getMessage(),
+                400
+            );
+        } catch (ProductNotFoundException $e) {
+            return $this->jsonResponder->error(
+                'NOT_FOUND',
+                'Product not found.',
+                404
+            );
+        } catch (DomainException $e) {
+            return $this->jsonResponder->error(
+                'CONFLICT',
+                $e->getMessage(),
+                409
+            );
+        } catch (Throwable $e) {
+            $this->logException($e);
+
+            return $this->jsonResponder->error(
+                'INTERNAL_SERVER_ERROR',
+                'Unable to approve and publish product.'.$e->getMessage(),
+                500
+            );
+        }
+    }
+
 
     public function manageShowAction()
     {
@@ -277,7 +322,8 @@ final class ProductController extends Controller
 
     private function productService(): ProductService
     {
-        return $this->di->getShared(ProductService::class);
+        //return $this->di->getShared(ProductService::class);
+        return $this->di->getShared('productService');
     }
 
     private function authenticatedUserId(): string

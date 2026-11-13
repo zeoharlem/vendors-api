@@ -41,5 +41,11 @@ final class PaymentRoutes
                 'action' => 'show',
             ]
         );
+
+        $api->addPost('/payments/verify/{reference}', [
+            'namespace' => $namespace,
+            'controller' => 'Payment',
+            'action' => 'verify',
+        ]);
     }
 }

@@ -72,7 +72,7 @@ final class VendorProductController extends Controller
         } catch (Throwable $e) {
             return $this->jsonResponder->error(
                 'INTERNAL_SERVER_ERROR',
-                'Unable to submit the product.',
+                'Unable to submit the product.'.$e->getMessage(),
                 500
             );
         }

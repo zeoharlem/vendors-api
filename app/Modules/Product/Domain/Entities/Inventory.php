@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Modules\Product\Application\Dtos;
+namespace App\Modules\Product\Domain\Entities;
 
 final readonly class Inventory
 {

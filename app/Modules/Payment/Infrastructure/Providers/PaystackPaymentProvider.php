@@ -162,6 +162,108 @@ final class PaystackPaymentProvider implements PaymentProviderInterface
         ];
     }
 
+
+    public function refundPayment(
+        string $transactionReference,
+        int $amountMinor,
+        string $currency,
+        string $refundReference,
+        string $customerNote,
+        string $merchantNote,
+    ): array {
+        $transactionReference = trim($transactionReference);
+        $currency = strtoupper(trim($currency));
+        $refundReference = trim($refundReference);
+
+        if (
+            $transactionReference === ''
+            || !preg_match('/^[A-Za-z0-9.\-=]+$/', $transactionReference)
+        ) {
+            throw new RuntimeException(
+                'Invalid original transaction reference.'
+            );
+        }
+
+        if ($amountMinor <= 0) {
+            throw new RuntimeException(
+                'Refund amount must be greater than zero.'
+            );
+        }
+
+        if ($currency !== 'NGN') {
+            throw new RuntimeException(
+                'Only NGN refunds are currently supported.'
+            );
+        }
+
+        if (
+            !preg_match('/^[A-Za-z0-9_-]{8,64}$/', $refundReference)
+        ) {
+            throw new RuntimeException(
+                'Refund reference must contain 8-64 valid characters.'
+            );
+        }
+
+        $response = $this->request(
+            method: 'POST',
+            endpoint: '/refund',
+            payload: [
+                'transaction' => $transactionReference,
+                'amount' => $amountMinor,
+                'currency' => $currency,
+                'reference' => $refundReference,
+                'customer_note' => mb_substr($customerNote, 0, 500),
+                'merchant_note' => mb_substr($merchantNote, 0, 500),
+            ],
+        );
+
+        $refund = $response['data'] ?? [];
+
+        $returnedReference = $refund['reference'] ?? null;
+        $returnedAmount = $refund['amount'] ?? null;
+        $returnedCurrency = $refund['currency'] ?? null;
+        $returnedStatus = $refund['status'] ?? null;
+
+        if (
+            !is_string($returnedReference)
+            || $returnedReference !== $refundReference
+            || !is_numeric($returnedAmount)
+            || (int) $returnedAmount !== $amountMinor
+            || !is_string($returnedCurrency)
+            || strtoupper($returnedCurrency) !== $currency
+            || !is_string($returnedStatus)
+        ) {
+            throw new RuntimeException(
+                'Paystack returned an invalid refund response.'
+            );
+        }
+
+        $transaction = $refund['transaction'] ?? null;
+
+        $returnedTransactionReference = is_array($transaction)
+            ? ($transaction['reference'] ?? null)
+            : $transaction;
+
+        if (
+            is_string($returnedTransactionReference)
+            && $returnedTransactionReference !== $transactionReference
+        ) {
+            throw new RuntimeException(
+                'Paystack refund transaction reference does not match.'
+            );
+        }
+
+        return [
+            'refund_reference' => $returnedReference,
+            'transaction_reference' => $transactionReference,
+            'amount' => (int) $returnedAmount,
+            'currency' => $currency,
+            'status' => strtolower($returnedStatus),
+            'provider_response' => $response,
+        ];
+    }
+
+
     /**
      * Send an authenticated request to Paystack.
      *
@@ -212,22 +314,34 @@ final class PaystackPaymentProvider implements PaymentProviderInterface
 
         curl_setopt_array($curl, $options);
 
-        try {
-            $rawResponse = curl_exec($curl);
+        // try {
+        //     $rawResponse = curl_exec($curl);
 
-            if ($rawResponse === false) {
-                throw new RuntimeException(
-                    'Paystack connection failed: ' . curl_error($curl)
-                );
-            }
+        //     if ($rawResponse === false) {
+        //         throw new RuntimeException(
+        //             'Paystack connection failed: ' . curl_error($curl)
+        //         );
+        //     }
 
-            $httpStatus = (int) curl_getinfo(
-                $curl,
-                CURLINFO_HTTP_CODE
+        //     $httpStatus = (int) curl_getinfo(
+        //         $curl,
+        //         CURLINFO_HTTP_CODE
+        //     );
+        // } finally {
+        //     curl_close($curl);
+        // }
+        $rawResponse = curl_exec($curl);
+
+        if ($rawResponse === false) {
+            throw new RuntimeException(
+                'Paystack connection failed: ' . curl_error($curl)
             );
-        } finally {
-            curl_close($curl);
         }
+
+        $httpStatus = (int) curl_getinfo(
+            $curl,
+            CURLINFO_HTTP_CODE
+        );
 
         $decoded = json_decode(
             $rawResponse,

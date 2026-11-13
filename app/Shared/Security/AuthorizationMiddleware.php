@@ -30,6 +30,7 @@ final class AuthorizationMiddleware
             'create' => ['products', 'create'],
             'update' => ['products', 'update'],
             'archive' => ['products', 'delete'],
+            'publish' => ['products', 'manage_status'],
         ],
 
         'vendor' => [
@@ -113,6 +114,19 @@ final class AuthorizationMiddleware
         'payment' => [
             'initialize' => ['payments', 'initialize'],
             'show' => ['payments', 'view_own'],
+            'verify' => ['payments', 'view_own'],
+        ],
+
+        'payoutaccount' => [
+            'listbanks' => ['payout_accounts', 'view'],
+            'listaccounts' => ['payout_accounts', 'view'],
+            'registeraccount' => ['payout_accounts', 'manage'],
+            'setdefault' => ['payout_accounts', 'manage'],
+            'disableaccount' => ['payout_accounts', 'manage'],
+        ],
+
+        'payout' => [
+            'request' => ['payout_accounts', 'manage'],
         ],
     ];
 

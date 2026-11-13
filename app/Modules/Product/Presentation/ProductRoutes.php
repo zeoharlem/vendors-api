@@ -53,5 +53,11 @@ final class ProductRoutes
             'controller' => 'Product',
             'action' => 'manageShow',
         ]);
+
+        $api->addPost('/admin/products/{id}/publish', [
+            'namespace' => $namespace,
+            'controller' => 'Product',
+            'action' => 'publish',
+        ]);
     }
 }

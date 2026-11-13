@@ -80,8 +80,11 @@ final class PdoPaymentEventRepository implements PaymentEventRepository
                     processed_at = NOW(),
                     last_error = NULL
                 WHERE id = :id
+                AND status = 'processing'
             SQL,
-            ['id' => $eventId]
+            [
+                'id' => $eventId,
+            ]
         );
     }
 
@@ -94,9 +97,9 @@ final class PdoPaymentEventRepository implements PaymentEventRepository
                 UPDATE public.payment_events
                 SET
                     status = 'failed',
-                    attempts = attempts + 1,
                     last_error = :last_error
                 WHERE id = :id
+                AND status = 'processing'
             SQL,
             [
                 'id' => $eventId,
@@ -151,5 +154,26 @@ final class PdoPaymentEventRepository implements PaymentEventRepository
         $event = $result->fetch();
 
         return $event ?: null;
+    }
+
+    public function claimForProcessing(string $eventId): bool
+    {
+        $result = $this->db->query(
+            <<<'SQL'
+        UPDATE public.payment_events
+        SET
+            status = 'processing',
+            attempts = attempts + 1,
+            last_error = NULL
+        WHERE id = :id
+          AND status IN ('received', 'failed')
+        RETURNING id
+        SQL,
+            [
+                'id' => $eventId,
+            ]
+        );
+
+        return $result->fetch() !== false;
     }
 }

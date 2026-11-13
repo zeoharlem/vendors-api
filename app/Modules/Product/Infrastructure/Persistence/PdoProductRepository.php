@@ -65,6 +65,9 @@ final readonly class PdoProductRepository implements ProductRepository
 
     public function update(Product $product): Product
     {
+        $parameters = $this->toParameters($product);
+        unset($parameters['created_at']);
+
         $sql = <<<'SQL'
             UPDATE public.products
             SET
@@ -81,7 +84,7 @@ final readonly class PdoProductRepository implements ProductRepository
             RETURNING *
         SQL;
 
-        $row = $this->fetchOne($sql, $this->toParameters($product));
+        $row = $this->fetchOne($sql, $parameters);
 
         if ($row === null) {
             throw new RuntimeException(
