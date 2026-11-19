@@ -26,4 +26,25 @@ interface OrderRepository
         string $customerId,
         string $orderId
     ): ?array;
+
+    /**
+     * Retrieves a parent order and its associated vendor orders
+     * for administrative use.
+     */
+    public function findAdminOrder(string $orderId): ?array;
+
+    /**
+     * Returns a paginated list of all parent orders for administrative use.
+     *
+     * @return array{
+     *     items: array,
+     *     pagination: array{
+     *         page: int,
+     *         per_page: int,
+     *         total: int,
+     *         total_pages: int
+     *     }
+     * }
+     */
+    public function listAdminOrders(array $filters): array;
 }

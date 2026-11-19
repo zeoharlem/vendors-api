@@ -11,6 +11,8 @@ use DomainException;
 use JsonException;
 use Phalcon\Contracts\Db\Adapter\Adapter as AdapterInterface;
 use Throwable;
+use InvalidArgumentException;
+use DateTimeImmutable;
 
 final readonly class PdoOrderRepository implements OrderRepository
 {
@@ -570,7 +572,7 @@ final readonly class PdoOrderRepository implements OrderRepository
             /**
              * Record the order.placed event in the same database transaction.
              * The outbox dispatcher will publish it after this transaction commits. 
-            **/
+             **/
             $this->outboxEventPublisher->publish(
                 eventType: EventTypes::ORDER_PLACED->value,
                 aggregateType: 'order',
@@ -695,6 +697,432 @@ final readonly class PdoOrderRepository implements OrderRepository
 
         return $order;
     }
+
+
+    /**
+     * Lists parent customer orders for administrative use.
+     *
+     * Supports pagination, customer/order search, status filters
+     * and date filtering.
+     *
+     * @return array{
+     *     items: array,
+     *     pagination: array{
+     *         page: int,
+     *         per_page: int,
+     *         total: int,
+     *         total_pages: int
+     *     }
+     * }
+     */
+    public function listAdminOrders(array $filters): array
+    {
+        $page = max(1, (int) ($filters['page'] ?? 1));
+
+        $perPage = (int) ($filters['per_page'] ?? 20);
+        $perPage = max(1, min($perPage, 100));
+
+        $offset = ($page - 1) * $perPage;
+
+        $where = [];
+        $bind = [];
+
+        /*
+         * Search by parent order number or customer details.
+         */
+        $search = trim((string) ($filters['search'] ?? ''));
+
+        if ($search !== '') {
+            if (mb_strlen($search) > 150) {
+                throw new InvalidArgumentException(
+                    'Search cannot exceed 150 characters.'
+                );
+            }
+
+            $where[] = "(
+            o.order_number ILIKE :search_order_number
+            OR u.first_name ILIKE :search_first_name
+            OR u.last_name ILIKE :search_last_name
+            OR u.email ILIKE :search_email
+            OR u.phone ILIKE :search_phone
+            OR CONCAT_WS(' ', u.first_name, u.last_name)
+                ILIKE :search_full_name
+        )";
+
+            $searchTerm = '%' . $search . '%';
+
+            $bind['search_order_number'] = $searchTerm;
+            $bind['search_first_name'] = $searchTerm;
+            $bind['search_last_name'] = $searchTerm;
+            $bind['search_email'] = $searchTerm;
+            $bind['search_phone'] = $searchTerm;
+            $bind['search_full_name'] = $searchTerm;
+        }
+
+        /*
+         * Filter by parent order status.
+         */
+        $status = trim((string) ($filters['status'] ?? ''));
+
+        if ($status !== '') {
+            if (mb_strlen($status) > 50) {
+                throw new InvalidArgumentException(
+                    'Invalid order status filter.'
+                );
+            }
+
+            $where[] = 'o.status = :order_status';
+            $bind['order_status'] = $status;
+        }
+
+        /*
+         * Filter by payment status independently
+         * from the parent order status.
+         */
+        $paymentStatus = trim(
+            (string) ($filters['payment_status'] ?? '')
+        );
+
+        if ($paymentStatus !== '') {
+            if (mb_strlen($paymentStatus) > 50) {
+                throw new InvalidArgumentException(
+                    'Invalid payment status filter.'
+                );
+            }
+
+            $where[] = 'o.payment_status = :payment_status';
+            $bind['payment_status'] = $paymentStatus;
+        }
+
+        /*
+         * Validate and apply date filters.
+         */
+        $dateFrom = trim((string) ($filters['date_from'] ?? ''));
+        $dateTo = trim((string) ($filters['date_to'] ?? ''));
+
+        $validateDate = static function (string $date): bool {
+            $parsed = DateTimeImmutable::createFromFormat(
+                '!Y-m-d',
+                $date
+            );
+
+            return $parsed !== false
+                && $parsed->format('Y-m-d') === $date;
+        };
+
+        if ($dateFrom !== '') {
+            if (!$validateDate($dateFrom)) {
+                throw new InvalidArgumentException(
+                    'date_from must use YYYY-MM-DD format.'
+                );
+            }
+
+            $where[] = 'o.created_at >= CAST(:date_from AS date)';
+            $bind['date_from'] = $dateFrom;
+        }
+
+        if ($dateTo !== '') {
+            if (!$validateDate($dateTo)) {
+                throw new InvalidArgumentException(
+                    'date_to must use YYYY-MM-DD format.'
+                );
+            }
+
+            $where[] = "
+            o.created_at < (
+                CAST(:date_to AS date) + INTERVAL '1 day'
+            )
+        ";
+
+            $bind['date_to'] = $dateTo;
+        }
+
+        if (
+            $dateFrom !== ''
+            && $dateTo !== ''
+            && $dateFrom > $dateTo
+        ) {
+            throw new InvalidArgumentException(
+                'date_from cannot be later than date_to.'
+            );
+        }
+
+        $whereSql = $where
+            ? 'WHERE ' . implode(' AND ', $where)
+            : '';
+
+        /*
+         * Count parent orders.
+         *
+         * This query intentionally does not join vendor_orders
+         * directly, avoiding duplicate parent order rows.
+         */
+        $countSql = "
+            SELECT COUNT(*) AS total
+            FROM orders o
+            INNER JOIN users u ON u.id = o.customer_id
+            {$whereSql}
+        ";
+
+        $countResult = $this->db->query(
+            $countSql,
+            $bind
+        )->fetch();
+
+        $total = (int) ($countResult['total'] ?? 0);
+
+        /*
+         * Aggregate vendor orders separately.
+         *
+         * Each parent order appears only once in the result.
+         */
+        $sql = <<<'SQL'
+            WITH vendor_order_summary AS (
+                SELECT
+                    order_id,
+                    COUNT(*)::integer AS vendor_order_count,
+                    (
+                        SELECT jsonb_object_agg(status, status_count)
+                        FROM (
+                            SELECT
+                                status,
+                                COUNT(*)::integer AS status_count
+                            FROM vendor_orders vo2
+                            WHERE vo2.order_id = vo.order_id
+                            GROUP BY status
+                        ) status_counts
+                    ) AS vendor_order_statuses
+                FROM vendor_orders vo
+                GROUP BY order_id
+            ),
+            item_summary AS (
+                SELECT
+                    order_id,
+                    COALESCE(SUM(quantity), 0)::integer AS item_count
+                FROM order_items
+                GROUP BY order_id
+            )
+            SELECT
+                o.id,
+                o.order_number,
+                o.status,
+                o.payment_status,
+                o.currency,
+                o.subtotal_minor,
+                o.shipping_minor,
+                o.tax_minor,
+                o.discount_minor,
+                o.total_minor,
+                o.paid_at,
+                o.created_at,
+                o.updated_at,
+
+                jsonb_build_object(
+                    'id', u.id,
+                    'first_name', u.first_name,
+                    'last_name', u.last_name,
+                    'email', u.email,
+                    'phone', u.phone
+                ) AS customer,
+
+                COALESCE(vos.vendor_order_count, 0)::integer
+                    AS vendor_order_count,
+
+                COALESCE(vos.vendor_order_statuses, '{}'::jsonb)
+                    AS vendor_order_statuses,
+
+                COALESCE(its.item_count, 0)::integer
+                    AS item_count
+
+            FROM orders o
+            INNER JOIN users u ON u.id = o.customer_id
+            LEFT JOIN vendor_order_summary vos ON vos.order_id = o.id
+            LEFT JOIN item_summary its ON its.order_id = o.id
+            /* ORDER_FILTERS */
+            ORDER BY o.created_at DESC, o.id DESC
+            LIMIT CAST(:limit AS integer)
+            OFFSET CAST(:offset AS integer)
+        SQL;
+
+        $sql = str_replace('/* ORDER_FILTERS */', $whereSql, $sql);
+
+        $queryBind = $bind;
+
+        $queryBind['limit'] = $perPage;
+        $queryBind['offset'] = $offset;
+
+        $rows = $this->db->query($sql, $queryBind)->fetchAll();
+
+        /*
+         * Normalize database values for the API response.
+         */
+        foreach ($rows as &$row) {
+            $row['vendor_order_count'] = (int) $row['vendor_order_count'];
+            $row['item_count'] = (int) $row['item_count'];
+
+            $row['subtotal_minor'] = (int) $row['subtotal_minor'];
+            $row['shipping_minor'] = (int) $row['shipping_minor'];
+            $row['tax_minor'] = (int) $row['tax_minor'];
+            $row['discount_minor'] = (int) $row['discount_minor'];
+            $row['total_minor'] = (int) $row['total_minor'];
+
+            if (is_string($row['customer'])) {
+                $row['customer'] = json_decode(
+                    $row['customer'],
+                    true,
+                    512,
+                    JSON_THROW_ON_ERROR
+                );
+            }
+
+            if (is_string($row['vendor_order_statuses'])) {
+                $row['vendor_order_statuses'] = json_decode(
+                    $row['vendor_order_statuses'],
+                    true,
+                    512,
+                    JSON_THROW_ON_ERROR
+                );
+            }
+        }
+
+        unset($row);
+
+        return [
+            'items' => $rows,
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total' => $total,
+                'total_pages' => (int) ceil($total / $perPage),
+            ],
+        ];
+    }
+
+
+    public function findAdminOrder(string $orderId): ?array
+    {
+        $sql = <<<'SQL'
+            SELECT customer_id
+            FROM orders
+            WHERE id = :order_id
+            LIMIT 1
+        SQL;
+
+        $order = $this->db->query(
+            $sql,
+            ['order_id' => $orderId],
+        )->fetch();
+
+        if (!$order) {
+            return null;
+        }
+
+        $details = $this->findCustomerOrder(
+            $order['customer_id'],
+            $orderId,
+        );
+
+        if ($details === null) {
+            return null;
+        }
+
+        $customerSql = <<<'SQL'
+            SELECT
+                id,
+                first_name,
+                last_name,
+                email,
+                phone
+            FROM users
+            WHERE id = :customer_id
+            LIMIT 1
+        SQL;
+
+        $customer = $this->db->query(
+            $customerSql,
+            ['customer_id' => $order['customer_id']],
+        )->fetch();
+
+        $details['customer'] = $customer ?: null;
+
+        foreach (['shipping_address', 'billing_address'] as $field) {
+            if (is_string($details[$field] ?? null)) {
+                $details[$field] = json_decode(
+                    $details[$field],
+                    true,
+                    512,
+                    JSON_THROW_ON_ERROR,
+                );
+            }
+        }
+
+        foreach ($details['vendor_orders'] as &$vendorOrder) {
+            foreach ($vendorOrder['items'] as &$item) {
+                if (is_string($item['attributes'] ?? null)) {
+                    $item['attributes'] = json_decode(
+                        $item['attributes'],
+                        true,
+                        512,
+                        JSON_THROW_ON_ERROR,
+                    );
+                }
+            }
+
+            unset($item);
+        }
+
+        unset($vendorOrder);
+
+        $historySql = <<<'SQL'
+            SELECT
+                osh.order_id,
+                osh.vendor_order_id,
+                vo.order_number AS vendor_order_number,
+                osh.old_status,
+                osh.new_status,
+                osh.changed_by,
+                COALESCE(
+                    NULLIF(
+                        BTRIM(CONCAT_WS(' ', u.first_name, u.last_name)),
+                        ''
+                    ),
+                    u.email,
+                    'System'
+                ) AS changed_by_name,
+                osh.reason,
+                osh.metadata,
+                osh.created_at
+            FROM public.order_status_history osh
+            LEFT JOIN public.users u
+                ON u.id = osh.changed_by
+            LEFT JOIN public.vendor_orders vo
+                ON vo.id = osh.vendor_order_id
+            WHERE osh.order_id = :order_id
+            ORDER BY
+                osh.created_at ASC,
+                osh.vendor_order_id NULLS FIRST
+        SQL;
+
+        $historyRows = $this->db->query(
+            $historySql,
+            ['order_id' => $orderId]
+        )->fetchAll();
+
+        $details['status_history'] = array_map(
+            static function (array $entry): array {
+                if (is_string($entry['metadata'] ?? null)) {
+                    $entry['metadata'] = json_decode($entry['metadata'], true, 512, JSON_THROW_ON_ERROR);
+                }
+
+                return $entry;
+            },
+            $historyRows ?: []
+        );
+
+        return $details;
+    }
+
+
 
     private function generateOrderNumber(string $prefix): string
     {
