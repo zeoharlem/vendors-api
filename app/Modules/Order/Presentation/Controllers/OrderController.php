@@ -69,4 +69,77 @@ final class OrderController extends Controller
             return $this->jsonResponder->error('INTERNAL_SERVER_ERROR', 'Unable to retrieve the order.', 500);
         }
     }
+
+
+    public function adminIndexAction(): Response
+    {
+        try {
+            $filters = [
+                'page' => $this->request->getQuery('page', 'int', 1),
+                'per_page' => $this->request->getQuery('per_page', 'int', 20),
+                'search' => $this->request->getQuery('search', 'string'),
+                'status' => $this->request->getQuery('status', 'string'),
+                'payment_status' => $this->request->getQuery('payment_status', 'string'),
+                'date_from' => $this->request->getQuery('date_from', 'string'),
+                'date_to' => $this->request->getQuery('date_to', 'string'),
+            ];
+
+            $result = $this->di
+                ->getShared('checkoutService')
+                ->listAdminOrders($filters);
+
+            return $this->jsonResponder->success($result);
+        } catch (InvalidArgumentException $exception) {
+            return $this->jsonResponder->error(
+                'UNPROCESSABLE_ENTITY',
+                $exception->getMessage(),
+                422
+            );
+        } catch (Throwable $exception) {
+            error_log((string) $exception);
+
+            return $this->jsonResponder->error(
+                'INTERNAL_SERVER_ERROR',
+                'Unable to retrieve orders at this time.'.$exception->getMessage(),
+                500
+            );
+        }
+    }
+
+    public function adminShowAction(): Response
+    {
+        try {
+            $orderId = (string) $this->dispatcher->getParameter('id');
+
+            if ($orderId === '') {
+                throw new InvalidArgumentException('A valid order ID is required.');
+            }
+
+            $order = $this->di->getShared('checkoutService')->getAdminOrder($orderId);
+
+            if ($order === null) {
+                return $this->jsonResponder->error(
+                    'NOT_FOUND',
+                    'Order not found.',
+                    404
+                );
+            }
+
+            return $this->jsonResponder->success($order);
+        } catch (InvalidArgumentException $exception) {
+            return $this->jsonResponder->error(
+                'UNPROCESSABLE_ENTITY',
+                $exception->getMessage(),
+                422
+            );
+        } catch (Throwable $exception) {
+            error_log((string) $exception);
+
+            return $this->jsonResponder->error(
+                'INTERNAL_SERVER_ERROR',
+                'Unable to retrieve order details.'.$exception->getMessage(),
+                500
+            );
+        }
+    }
 }

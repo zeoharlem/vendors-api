@@ -23,5 +23,20 @@ final class OrderRoute
             'controller' => 'Order',
             'action' => 'show',
         ]);
+
+        $api->addGet('/admin/orders', [
+            'namespace' => $namespace,
+            'controller' => 'Order',
+            'action' => 'adminIndex',
+        ]);
+
+        $api->addGet(
+            '/admin/orders/{id}',
+            [
+                'namespace' => $namespace,
+                'controller' => 'Order',
+                'action' => 'adminShow',
+            ]
+        );
     }
 }

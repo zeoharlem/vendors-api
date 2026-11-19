@@ -51,4 +51,17 @@ final readonly class CheckoutService
             $orderId
         );
     }
+
+    /**
+     * Lists parent orders for authorised administrative users.
+     */
+    public function listAdminOrders(array $filters): array
+    {
+        return $this->orderRepository->listAdminOrders($filters);
+    }
+
+    public function getAdminOrder(string $orderId): ?array
+    {
+        return $this->orderRepository->findAdminOrder($orderId);
+    }
 }

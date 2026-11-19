@@ -117,6 +117,8 @@ final class AuthorizationMiddleware
         'order' => [
             'checkout' => ['orders', 'create'],
             'show' => ['orders', 'view_own'],
+            'adminindex' => ['orders', 'view_all'],
+            'adminshow' => ['orders', 'view_all'],
         ],
 
         'payment' => [
