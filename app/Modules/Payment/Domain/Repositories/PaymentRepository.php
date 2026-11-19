@@ -141,4 +141,13 @@ interface PaymentRepository
         string $status,
         array $providerResponse
     ): array;
+
+    /**
+     * Retrieve all payment attempts associated with an order.
+     *
+     * Intended for authorised administrative order inspection.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function findAdminPaymentsForOrder(string $orderId): array;
 }

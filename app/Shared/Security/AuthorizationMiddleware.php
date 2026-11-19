@@ -125,6 +125,7 @@ final class AuthorizationMiddleware
             'initialize' => ['payments', 'initialize'],
             'show' => ['payments', 'view_own'],
             'verify' => ['payments', 'view_own'],
+            'adminpayments' => ['orders', 'view_all'],
         ],
 
         'payoutaccount' => [

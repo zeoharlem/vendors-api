@@ -1789,6 +1789,45 @@ final class PdoPaymentRepository implements PaymentRepository
         }
     }
 
+    public function findAdminPaymentsForOrder(string $orderId): array
+    {
+        $orderId = trim($orderId);
+
+        if ($orderId === '') {
+            throw new InvalidArgumentException(
+                'Order ID is required.'
+            );
+        }
+
+        $result = $this->db->query(
+            <<<'SQL'
+                SELECT
+                    id,
+                    order_id,
+                    provider,
+                    reference,
+                    provider_transaction_id,
+                    amount_minor,
+                    currency,
+                    status,
+                    failure_reason,
+                    initialized_at,
+                    verified_at,
+                    failed_at,
+                    created_at,
+                    updated_at
+                FROM public.payments
+                WHERE order_id = :order_id
+                ORDER BY created_at DESC, id DESC
+            SQL,
+            [
+                'order_id' => $orderId,
+            ]
+        );
+
+        return $result->fetchAll() ?: [];
+    }
+
     private function assertPaymentUpdated(
         string $reference,
         string $expectedStatus

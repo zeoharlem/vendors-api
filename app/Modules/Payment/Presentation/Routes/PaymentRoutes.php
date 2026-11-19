@@ -47,5 +47,15 @@ final class PaymentRoutes
             'controller' => 'Payment',
             'action' => 'verify',
         ]);
+
+        // Admin: retrieve all payment attempts associated with an order.
+        $api->addGet(
+            '/admin/orders/{id}/payments',
+            [
+                'namespace' => $namespace,
+                'controller' => 'Payment',
+                'action' => 'adminPayments',
+            ]
+        );
     }
 }

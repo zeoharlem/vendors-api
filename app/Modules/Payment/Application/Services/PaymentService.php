@@ -484,4 +484,46 @@ final class PaymentService
         );
     }
 
+    /**
+     * Retrieve payment attempts for an order for administrative inspection.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getAdminPaymentsForOrder(string $orderId): array
+    {
+        $orderId = trim($orderId);
+
+        if ($orderId === '') {
+            throw new InvalidArgumentException('Order ID is required.');
+        }
+
+        $payments = $this->paymentRepository
+            ->findAdminPaymentsForOrder($orderId);
+
+        return array_map(
+            static fn(array $payment): array => [
+                'id' => (string) $payment['id'],
+                'order_id' => (string) $payment['order_id'],
+                'provider' => (string) $payment['provider'],
+                'reference' => (string) $payment['reference'],
+                'provider_transaction_id' =>
+                    $payment['provider_transaction_id'] !== null
+                    ? (string) $payment['provider_transaction_id']
+                    : null,
+                'amount_minor' => (int) $payment['amount_minor'],
+                'currency' => (string) $payment['currency'],
+                'status' => (string) $payment['status'],
+                'failure_reason' => $payment['failure_reason'] !== null
+                    ? (string) $payment['failure_reason']
+                    : null,
+                'initialized_at' => $payment['initialized_at'],
+                'verified_at' => $payment['verified_at'],
+                'failed_at' => $payment['failed_at'],
+                'created_at' => $payment['created_at'],
+                'updated_at' => $payment['updated_at'],
+            ],
+            $payments
+        );
+    }
+
 }
