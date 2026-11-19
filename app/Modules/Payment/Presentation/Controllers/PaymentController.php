@@ -149,4 +149,55 @@ final class PaymentController extends \Phalcon\Mvc\Controller
         // Return the refreshed payment using the existing response format.
         return $this->showAction();
     }
+
+    public function adminPaymentsAction(): mixed
+    {
+        try {
+            $adminId = (string) $this->dispatcher->getParameter('userAuthId');
+
+            if ($adminId === '') {
+                return $this->jsonResponder->error(
+                    'UNAUTHORIZED',
+                    'Authentication is required.',
+                    401
+                );
+            }
+
+            $orderId = trim(
+                (string) $this->dispatcher->getParameter('id', '')
+            );
+
+            if ($orderId === '') {
+                return $this->jsonResponder->error(
+                    'UNPROCESSABLE_ENTITY',
+                    'Order ID is required.',
+                    422
+                );
+            }
+
+            $paymentService = $this->di->getShared('paymentService');
+
+            $payments = $paymentService->getAdminPaymentsForOrder($orderId);
+
+            return $this->jsonResponder->success([
+                'payments' => $payments,
+            ]);
+        } catch (InvalidArgumentException $exception) {
+            return $this->jsonResponder->error(
+                'UNPROCESSABLE_ENTITY',
+                $exception->getMessage(),
+                422
+            );
+        } catch (Throwable $exception) {
+            error_log(
+                'Admin order payment retrieval failed: ' . $exception->getMessage()
+            );
+
+            return $this->jsonResponder->error(
+                'INTERNAL_SERVER_ERROR',
+                'Unable to retrieve order payment details.',
+                500
+            );
+        }
+    }
 }
