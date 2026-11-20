@@ -777,4 +777,567 @@ final class LedgerPostingService
 
         return $amount;
     }
+
+    /**
+     * Allocate a refund proportionally across the original payment components.
+     *
+     * The original payment allocation is the source of truth. Commission rates
+     * are never recalculated during a refund.
+     *
+     * @return array{
+     *     vendor_payable_minor: int,
+     *     commission_minor: int,
+     *     shipping_minor: int,
+     *     tax_minor: int
+     * }
+     */
+    private function allocateRefundComponents(
+        int $refundAmountMinor,
+        array $originalAllocation
+    ): array {
+        if ($refundAmountMinor <= 0) {
+            throw new InvalidArgumentException(
+                'Refund amount must be greater than zero.'
+            );
+        }
+
+        $components = [
+            'vendor_payable_minor' => $this->amount(
+                $originalAllocation['vendor_payable_minor'] ?? 0,
+                'Original vendor payable'
+            ),
+            'commission_minor' => $this->amount(
+                $originalAllocation['commission_minor'] ?? 0,
+                'Original commission'
+            ),
+            'shipping_minor' => $this->amount(
+                $originalAllocation['shipping_minor'] ?? 0,
+                'Original shipping'
+            ),
+            'tax_minor' => $this->amount(
+                $originalAllocation['tax_minor'] ?? 0,
+                'Original tax'
+            ),
+        ];
+
+        $originalTotal = array_sum($components);
+
+        if ($originalTotal <= 0) {
+            throw new RuntimeException(
+                'Original payment allocation is invalid.'
+            );
+        }
+
+        if ($refundAmountMinor > $originalTotal) {
+            throw new InvalidArgumentException(
+                'Refund amount exceeds the original allocation.'
+            );
+        }
+
+        if ($refundAmountMinor === $originalTotal) {
+            return $components;
+        }
+
+        $allocated = [];
+        $remainders = [];
+        $allocatedTotal = 0;
+
+        foreach ($components as $key => $componentAmount) {
+            $numerator = $refundAmountMinor * $componentAmount;
+
+            $share = intdiv($numerator, $originalTotal);
+
+            $allocated[$key] = $share;
+            $allocatedTotal += $share;
+
+            $remainders[$key] = $numerator % $originalTotal;
+        }
+
+        // Distribute rounding remainder using the largest fractional shares.
+        arsort($remainders);
+
+        $remaining = $refundAmountMinor - $allocatedTotal;
+
+        foreach (array_keys($remainders) as $key) {
+            if ($remaining <= 0) {
+                break;
+            }
+
+            if ($allocated[$key] >= $components[$key]) {
+                continue;
+            }
+
+            $allocated[$key]++;
+            $remaining--;
+        }
+
+        if ($remaining !== 0) {
+            throw new RuntimeException(
+                'Unable to balance refund allocation.'
+            );
+        }
+
+        if (array_sum($allocated) !== $refundAmountMinor) {
+            throw new RuntimeException(
+                'Refund allocation does not balance.'
+            );
+        }
+
+        return $allocated;
+    }
+
+    /**
+     * Post the accounting entries for a successful customer refund.
+     *
+     * The original payment allocation is used as the source of truth.
+     * The caller must ensure any required vendor payout recovery has
+     * already been confirmed and accounted for.
+     *
+     * This method participates in the caller's existing transaction.
+     *
+     * @return array<string, mixed>
+     */
+    public function postRefund(
+        array $refund,
+        array $originalAllocationTransaction
+    ): array {
+        $refundId = $refund['id'] ?? null;
+        $paymentId = $refund['payment_id'] ?? null;
+        $orderId = $refund['order_id'] ?? null;
+        $vendorOrderId = $refund['vendor_order_id'] ?? null;
+
+        if (
+            !$refundId ||
+            !$paymentId ||
+            !$orderId ||
+            !$vendorOrderId
+        ) {
+            throw new InvalidArgumentException(
+                'Refund, payment, order and vendor order IDs are required.'
+            );
+        }
+
+        $currency = strtoupper(trim((string) ($refund['currency'] ?? '')));
+
+        if (!preg_match('/^[A-Z]{3}$/', $currency)) {
+            throw new InvalidArgumentException(
+                'A valid refund currency is required.'
+            );
+        }
+
+        $refundAmountMinor = $this->amount($refund, 'amount_minor');
+
+        if ($refundAmountMinor <= 0) {
+            throw new InvalidArgumentException(
+                'Refund amount must be greater than zero.'
+            );
+        }
+
+        if (
+            ($originalAllocationTransaction['status'] ?? null) !== 'posted' ||
+            ($originalAllocationTransaction['transaction_type'] ?? null)
+            !== 'order_payment_allocation' ||
+            ($originalAllocationTransaction['payment_id'] ?? null) !== $paymentId ||
+            ($originalAllocationTransaction['vendor_order_id'] ?? null)
+            !== $vendorOrderId ||
+            strtoupper(trim((string) (
+                $originalAllocationTransaction['currency'] ?? ''
+            ))) !== $currency
+        ) {
+            throw new RuntimeException(
+                'The original payment allocation transaction is invalid.'
+            );
+        }
+
+        $metadata = $originalAllocationTransaction['metadata'] ?? [];
+
+        if (is_string($metadata)) {
+            try {
+                $metadata = json_decode(
+                    $metadata,
+                    true,
+                    512,
+                    JSON_THROW_ON_ERROR
+                );
+            } catch (\JsonException $exception) {
+                throw new RuntimeException(
+                    'Original payment allocation metadata is invalid.',
+                    previous: $exception
+                );
+            }
+        }
+
+        if (!is_array($metadata)) {
+            throw new RuntimeException(
+                'Original payment allocation metadata is unavailable.'
+            );
+        }
+
+        $storeId = $metadata['store_id'] ?? null;
+
+        if (
+            !$storeId ||
+            ($metadata['vendor_order_id'] ?? null) !== $vendorOrderId
+        ) {
+            throw new RuntimeException(
+                'Original payment allocation does not match the refund.'
+            );
+        }
+
+        $originalAllocation = [
+            'vendor_payable_minor' => $this->amount(
+                $metadata,
+                'vendor_payable_minor'
+            ),
+            'commission_minor' => $this->amount(
+                $metadata,
+                'commission_minor'
+            ),
+            'shipping_minor' => $this->amount(
+                $metadata,
+                'shipping_minor'
+            ),
+            'tax_minor' => $this->amount(
+                $metadata,
+                'tax_minor'
+            ),
+        ];
+
+        $originalTotal = array_sum($originalAllocation);
+
+        if ($originalTotal <= 0 || $refundAmountMinor > $originalTotal) {
+            throw new InvalidArgumentException(
+                'Refund amount exceeds the original vendor-order allocation.'
+            );
+        }
+
+        $allocation = $this->allocateRefundComponents(
+            $refundAmountMinor,
+            $originalAllocation
+        );
+
+        $transactionKey = sprintf(
+            'refund:%s:settlement',
+            $refundId
+        );
+
+        /*
+         * Check idempotency before creating accounts or entries.
+         */
+        $existingTransaction = $this->ledgerRepository
+            ->findTransactionByKey($transactionKey);
+
+        if ($existingTransaction !== null) {
+            $matches = (
+                ($existingTransaction['status'] ?? null) === 'posted' &&
+                ($existingTransaction['transaction_type'] ?? null)
+                === 'customer_refund_settlement' &&
+                ($existingTransaction['refund_id'] ?? null) === $refundId &&
+                ($existingTransaction['payment_id'] ?? null) === $paymentId &&
+                ($existingTransaction['vendor_order_id'] ?? null)
+                === $vendorOrderId &&
+                strtoupper(trim((string) (
+                    $existingTransaction['currency'] ?? ''
+                ))) === $currency
+            );
+
+            if (!$matches) {
+                throw new RuntimeException(
+                    'An existing refund ledger transaction does not match '
+                    . 'the current refund. Manual reconciliation is required.'
+                );
+            }
+
+            return [
+                'refund_id' => $refundId,
+                'ledger_transaction_id' => $existingTransaction['id'],
+                'status' => 'already_posted',
+                'allocation' => $allocation,
+            ];
+        }
+
+        /*
+         * Resolve the accounts.
+         */
+        $clearingAccount = $this->account(
+            'PAYSTACK_CLEARING',
+            'Paystack Clearing',
+            'asset',
+            $currency
+        );
+
+        $vendorPayableAccount = $this->account(
+            'VENDOR_PAYABLE_' . strtoupper((string) $storeId),
+            'Vendor Payable - ' . $storeId,
+            'liability',
+            $currency,
+            null,
+            (string) $storeId
+        );
+
+        $commissionAccount = $this->account(
+            'PLATFORM_COMMISSION',
+            'Platform Commission Revenue',
+            'revenue',
+            $currency
+        );
+
+        $shippingAccount = $this->account(
+            'SHIPPING_PAYABLE',
+            'Shipping Payable',
+            'liability',
+            $currency
+        );
+
+        $taxAccount = $this->account(
+            'TAX_PAYABLE',
+            'Tax Payable',
+            'liability',
+            $currency
+        );
+
+        /*
+         * Create the refund transaction.
+         */
+        $transaction = $this->ledgerRepository->createTransaction([
+            'transaction_key' => $transactionKey,
+            'transaction_type' => 'customer_refund_settlement',
+            'order_id' => $orderId,
+            'payment_id' => $paymentId,
+            'vendor_order_id' => $vendorOrderId,
+            'refund_id' => $refundId,
+            'currency' => $currency,
+            'description' => 'Customer refund settlement for vendor order '
+                . $vendorOrderId,
+            'metadata' => [
+                'refund_id' => $refundId,
+                'payment_id' => $paymentId,
+                'vendor_order_id' => $vendorOrderId,
+                'store_id' => $storeId,
+                'refund_amount_minor' => $refundAmountMinor,
+                'original_allocation_transaction_id'
+                => $originalAllocationTransaction['id'],
+                'vendor_payable_minor'
+                => $allocation['vendor_payable_minor'],
+                'commission_minor'
+                => $allocation['commission_minor'],
+                'shipping_minor'
+                => $allocation['shipping_minor'],
+                'tax_minor'
+                => $allocation['tax_minor'],
+            ],
+        ]);
+
+        if (($transaction['status'] ?? null) !== 'pending') {
+            throw new RuntimeException(
+                'New refund ledger transaction is not in pending status.'
+            );
+        }
+
+        $transactionId = $transaction['id'];
+
+        /*
+         * DEBIT: Reverse the original vendor payable allocation.
+         */
+        if ($allocation['vendor_payable_minor'] > 0) {
+            $this->ledgerRepository->createEntry([
+                'ledger_transaction_id' => $transactionId,
+                'ledger_account_id' => $vendorPayableAccount['id'],
+                'entry_side' => 'D',
+                'amount_minor' => $allocation['vendor_payable_minor'],
+                'currency' => $currency,
+                'description' => 'Vendor payable reversed for customer refund',
+            ]);
+        }
+
+        /*
+         * DEBIT: Reverse platform commission.
+         */
+        if ($allocation['commission_minor'] > 0) {
+            $this->ledgerRepository->createEntry([
+                'ledger_transaction_id' => $transactionId,
+                'ledger_account_id' => $commissionAccount['id'],
+                'entry_side' => 'D',
+                'amount_minor' => $allocation['commission_minor'],
+                'currency' => $currency,
+                'description' => 'Platform commission reversed for refund',
+            ]);
+        }
+
+        /*
+         * DEBIT: Reverse shipping payable.
+         */
+        if ($allocation['shipping_minor'] > 0) {
+            $this->ledgerRepository->createEntry([
+                'ledger_transaction_id' => $transactionId,
+                'ledger_account_id' => $shippingAccount['id'],
+                'entry_side' => 'D',
+                'amount_minor' => $allocation['shipping_minor'],
+                'currency' => $currency,
+                'description' => 'Shipping payable reversed for refund',
+            ]);
+        }
+
+        /*
+         * DEBIT: Reverse tax payable.
+         */
+        if ($allocation['tax_minor'] > 0) {
+            $this->ledgerRepository->createEntry([
+                'ledger_transaction_id' => $transactionId,
+                'ledger_account_id' => $taxAccount['id'],
+                'entry_side' => 'D',
+                'amount_minor' => $allocation['tax_minor'],
+                'currency' => $currency,
+                'description' => 'Tax payable reversed for refund',
+            ]);
+        }
+
+        /*
+         * CREDIT: Paystack clearing for the customer refund.
+         */
+        $this->ledgerRepository->createEntry([
+            'ledger_transaction_id' => $transactionId,
+            'ledger_account_id' => $clearingAccount['id'],
+            'entry_side' => 'C',
+            'amount_minor' => $refundAmountMinor,
+            'currency' => $currency,
+            'description' => 'Customer refund paid through Paystack',
+        ]);
+
+        $this->ledgerRepository->markTransactionPosted($transactionId);
+
+        return [
+            'refund_id' => $refundId,
+            'ledger_transaction_id' => $transactionId,
+            'status' => 'posted',
+            'allocation' => $allocation,
+        ];
+    }
+
+    public function postVendorPayoutRecovery(
+        array $recovery,
+        array $payout
+    ): array {
+        $recoveryId = (string) $recovery['id'];
+        $payoutId = (string) $payout['id'];
+        $payableId = (string) $recovery['vendor_payable_id'];
+        $storeId = (string) $recovery['store_id'];
+        $currency = strtoupper(trim((string) $recovery['currency']));
+        $amount = (int) $recovery['amount_minor'];
+
+        if ($amount <= 0) {
+            throw new InvalidArgumentException(
+                'Recovery amount must be greater than zero.'
+            );
+        }
+
+        if (
+            (string) $payout['vendor_payable_id'] !== $payableId
+            || (string) $payout['store_id'] !== $storeId
+            || strtoupper(trim((string) $payout['currency'])) !== $currency
+            || (string) $payout['status'] !== 'success'
+            || $amount > (int) $payout['amount_minor']
+        ) {
+            throw new InvalidArgumentException(
+                'The recovery does not match a successful payout.'
+            );
+        }
+
+        $transactionKey = "payout-recovery:{$recoveryId}:confirmation";
+
+        $existing = $this->ledgerRepository->findTransactionByKey(
+            $transactionKey
+        );
+
+        if ($existing !== null) {
+            $metadata = $existing['metadata'] ?? [];
+
+            if (is_string($metadata)) {
+                $metadata = json_decode(
+                    $metadata,
+                    true,
+                    512,
+                    JSON_THROW_ON_ERROR
+                );
+            }
+
+            if (
+                ($existing['status'] ?? null) !== 'posted'
+                || ($existing['transaction_type'] ?? null)
+                !== 'vendor_payout_recovery'
+                || ($existing['payout_id'] ?? null) !== $payoutId
+                || (string) ($metadata['recovery_id'] ?? '') !== $recoveryId
+                || (int) ($metadata['amount_minor'] ?? 0) !== $amount
+            ) {
+                throw new RuntimeException(
+                    'An incompatible ledger transaction already exists for this recovery.'
+                );
+            }
+
+            return $existing;
+        }
+
+        $clearingAccount = $this->account(
+            'PAYOUT_RECOVERY_CLEARING',
+            'Vendor Payout Recovery Clearing',
+            'asset',
+            $currency
+        );
+
+        $vendorPayableAccount = $this->account(
+            'VENDOR_PAYABLE_' . strtoupper($storeId),
+            'Vendor Payable',
+            'liability',
+            $currency,
+            null,
+            $storeId
+        );
+
+        $transaction = $this->ledgerRepository->createTransaction([
+            'transaction_key' => $transactionKey,
+            'transaction_type' => 'vendor_payout_recovery',
+            'payout_id' => $payoutId,
+            'currency' => $currency,
+            'description' => 'Vendor payout recovery confirmation',
+            'metadata' => [
+                'recovery_id' => $recoveryId,
+                'payout_id' => $payoutId,
+                'vendor_payable_id' => $payableId,
+                'store_id' => $storeId,
+                'amount_minor' => $amount,
+                'return_method' => $recovery['return_method'],
+                'confirmation_reference' => $recovery['confirmation_reference'],
+            ],
+        ]);
+
+        $transactionId = (string) $transaction['id'];
+
+        // Cash recovered from the vendor.
+        $this->ledgerRepository->createEntry([
+            'transaction_id' => $transactionId,
+            'account_id' => $clearingAccount['id'],
+            'side' => 'D',
+            'amount_minor' => $amount,
+            'currency' => $currency,
+        ]);
+
+        // Restore the vendor payable liability so the customer refund
+        // can subsequently debit the recovered amount.
+        $this->ledgerRepository->createEntry([
+            'transaction_id' => $transactionId,
+            'account_id' => $vendorPayableAccount['id'],
+            'side' => 'C',
+            'amount_minor' => $amount,
+            'currency' => $currency,
+        ]);
+
+        $this->ledgerRepository->markTransactionPosted($transactionId);
+
+        return [
+            'id' => $transactionId,
+            'transaction_key' => $transactionKey,
+            'status' => 'posted',
+            'amount_minor' => $amount,
+        ];
+    }
 }

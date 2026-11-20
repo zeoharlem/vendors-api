@@ -150,4 +150,11 @@ interface PaymentRepository
      * @return array<int, array<string, mixed>>
      */
     public function findAdminPaymentsForOrder(string $orderId): array;
+
+
+    public function settleSuccessfulRefund(
+        string $refundId,
+        ?string $providerReference,
+        array $providerResponse,
+    ): array;
 }
