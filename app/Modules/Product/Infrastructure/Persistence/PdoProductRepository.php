@@ -215,6 +215,110 @@ final readonly class PdoProductRepository implements ProductRepository
         );
     }
 
+    /**
+     * @return Product[]
+     */
+    public function findAdminProducts(
+        array $filters,
+        int $limit,
+        int $offset
+    ): array {
+        $where = [];
+        $parameters = [
+            'limit' => $limit,
+            'offset' => $offset,
+        ];
+
+        if (($filters['search'] ?? '') !== '') {
+            $where[] = <<<'SQL'
+            (
+                p.name ILIKE :name_search
+                OR p.slug ILIKE :slug_search
+            )
+        SQL;
+
+            $parameters['name_search'] = '%' . $filters['search'] . '%';
+            $parameters['slug_search'] = '%' . $filters['search'] . '%';
+        }
+
+        if (($filters['status'] ?? null) !== null) {
+            $where[] = 'p.status = :status';
+            $parameters['status'] = $filters['status'];
+        }
+
+        if (($filters['moderation_status'] ?? null) !== null) {
+            $where[] = 'p.moderation_status = :moderation_status';
+            $parameters['moderation_status'] = $filters['moderation_status'];
+        }
+
+        $whereSql = $where === []
+            ? ''
+            : 'WHERE ' . implode(' AND ', $where);
+
+        $sql = <<<SQL
+            SELECT p.*
+            FROM public.products p
+            {$whereSql}
+            ORDER BY p.created_at DESC, p.id DESC
+            LIMIT :limit
+            OFFSET :offset
+        SQL;
+
+        $result = $this->db->query($sql, $parameters);
+
+        $products = [];
+
+        while (($row = $result->fetch()) !== false) {
+            if (is_array($row)) {
+                $products[] = $this->hydrate($row);
+            }
+        }
+
+        return $products;
+    }
+
+    public function countAdminProducts(array $filters): int
+    {
+        $where = [];
+        $parameters = [];
+
+        if (($filters['search'] ?? '') !== '') {
+            $where[] = <<<'SQL'
+            (
+                p.name ILIKE :name_search
+                OR p.slug ILIKE :slug_search
+            )
+        SQL;
+
+            $parameters['name_search'] = '%' . $filters['search'] . '%';
+            $parameters['slug_search'] = '%' . $filters['search'] . '%';
+        }
+
+        if (($filters['status'] ?? null) !== null) {
+            $where[] = 'p.status = :status';
+            $parameters['status'] = $filters['status'];
+        }
+
+        if (($filters['moderation_status'] ?? null) !== null) {
+            $where[] = 'p.moderation_status = :moderation_status';
+            $parameters['moderation_status'] = $filters['moderation_status'];
+        }
+
+        $whereSql = $where === []
+            ? ''
+            : 'WHERE ' . implode(' AND ', $where);
+
+        $sql = <<<SQL
+            SELECT COUNT(*) AS total
+            FROM public.products p
+            {$whereSql}
+        SQL;
+
+        $row = $this->fetchOne($sql, $parameters);
+
+        return (int) ($row['total'] ?? 0);
+    }
+
     private function formatDate(?DateTimeImmutable $date): ?string
     {
         return $date?->format('Y-m-d H:i:s.uP');

@@ -271,6 +271,102 @@ final class ProductController extends Controller
     }
 
 
+    public function adminIndexAction()
+    {
+        try {
+            $filters = [
+                'search' => (string) $this->request->getQuery(
+                    'search',
+                    'string',
+                    ''
+                ),
+                'status' => $this->request->getQuery(
+                    'status',
+                    'string'
+                ),
+                'moderation_status' => $this->request->getQuery(
+                    'moderation_status',
+                    'string'
+                ),
+                'page' => $this->request->getQuery(
+                    'page',
+                    'int',
+                    1
+                ),
+                'per_page' => $this->request->getQuery(
+                    'per_page',
+                    'int',
+                    20
+                ),
+            ];
+
+            $result = $this->productService()->listAdminProducts($filters);
+
+            return $this->jsonResponder->success([
+                'items' => array_map(
+                    fn(Product $product): array =>
+                        $this->serializeProductSummary(
+                        $product,
+                        $primaryImages[$product->id] ?? null
+                    ),
+                    $result['items']
+                ),
+                'pagination' => $result['pagination'],
+            ]);
+        } catch (InvalidArgumentException $e) {
+            return $this->jsonResponder->error(
+                'INVALID_REQUEST',
+                $e->getMessage(),
+                400
+            );
+        } catch (Throwable $e) {
+            $this->logException($e);
+
+            return $this->jsonResponder->error(
+                'INTERNAL_SERVER_ERROR',
+                'Unable to retrieve products.',
+                500
+            );
+        }
+    }
+
+    /**
+     * Lightweight product representation for admin listings.
+     *
+     * Images are loaded separately on the product details endpoint
+     * to avoid an N+1 database query for the listing.
+     */
+    private function serializeProductSummary(
+        Product $product,
+        ?ProductMedia $primaryImage
+    ): array {
+        return [
+            'id' => $product->id,
+            'store_id' => $product->storeId,
+            'category_id' => $product->categoryId,
+            'name' => $product->name,
+            'slug' => $product->slug,
+            'description' => $product->description,
+            'status' => $product->status->value,
+            'moderation_status' => $product->moderationStatus->value,
+            'primary_image' => $primaryImage === null
+                ? null
+                : [
+                    'id' => $primaryImage->id,
+                    'url' => sprintf(
+                        '/api/v1/products/%s/images/%s/file',
+                        rawurlencode($product->id),
+                        rawurlencode($primaryImage->id)
+                    ),
+                    'alt_text' => $primaryImage->altText,
+                ],
+            'published_at' => $this->formatDate($product->publishedAt),
+            'created_at' => $this->formatDate($product->createdAt),
+            'updated_at' => $this->formatDate($product->updatedAt),
+        ];
+    }
+
+
     public function manageShowAction()
     {
         try {

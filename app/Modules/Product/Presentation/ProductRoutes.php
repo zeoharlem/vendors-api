@@ -95,5 +95,14 @@ final class ProductRoutes
             'controller' => 'ProductImage',
             'action' => 'replace',
         ]);
+
+        $api->addGet(
+            '/admin/products',
+            [
+                'namespace' => $namespace,
+                'controller' => 'Product',
+                'action' => 'adminIndex',
+            ]
+        );
     }
 }

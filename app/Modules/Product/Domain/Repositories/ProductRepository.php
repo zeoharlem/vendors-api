@@ -18,4 +18,15 @@ interface ProductRepository
     public function findPublishedById(string $id): ?Product;
 
     public function findByStoreAndSlug(string $storeId, string $slug): ?Product;
+
+    /**
+     * @return Product[]
+     */
+    public function findAdminProducts(
+        array $filters,
+        int $limit,
+        int $offset
+    ): array;
+
+    public function countAdminProducts(array $filters): int;
 }
