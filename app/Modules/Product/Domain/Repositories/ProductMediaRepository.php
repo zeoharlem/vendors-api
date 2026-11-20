@@ -40,4 +40,12 @@ interface ProductMediaRepository
         string $mediaId,
         string $objectKey,
     ): ?ProductMedia;
+
+    /**
+     * Returns the first image for each product, indexed by product ID.
+     *
+     * @param string[] $productIds
+     * @return array<string, ProductMedia>
+     */
+    public function findPrimaryByProductIds(array $productIds): array;
 }

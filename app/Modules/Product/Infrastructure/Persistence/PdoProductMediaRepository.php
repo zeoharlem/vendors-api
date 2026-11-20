@@ -190,6 +190,71 @@ final readonly class PdoProductMediaRepository implements ProductMediaRepository
         return $row === false ? null : $this->hydrate($row);
     }
 
+    /**
+     * @param string[] $productIds
+     * @return array<string, ProductMedia>
+     */
+    public function findPrimaryByProductIds(array $productIds): array
+    {
+        $productIds = array_values(array_unique(array_filter(
+            $productIds,
+            static fn(string $id): bool => trim($id) !== ''
+        )));
+
+        if ($productIds === []) {
+            return [];
+        }
+
+        $placeholders = [];
+        $parameters = [];
+
+        foreach ($productIds as $index => $productId) {
+            $placeholder = 'product_id_' . $index;
+
+            $placeholders[] = ':' . $placeholder;
+            $parameters[$placeholder] = $productId;
+        }
+
+        $inClause = implode(', ', $placeholders);
+
+        $sql = <<<SQL
+            SELECT
+                ranked.id,
+                ranked.product_id,
+                ranked.object_key,
+                ranked.alt_text,
+                ranked.sort_order,
+                ranked.created_at
+            FROM (
+                SELECT
+                    pm.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY pm.product_id
+                        ORDER BY
+                            pm.sort_order ASC,
+                            pm.created_at ASC,
+                            pm.id ASC
+                    ) AS image_rank
+                FROM public.product_media pm
+                WHERE pm.product_id IN ({$inClause})
+            ) ranked
+            WHERE ranked.image_rank = 1
+        SQL;
+
+        $result = $this->db->query($sql, $parameters);
+
+        $rows = $result->fetchAll();
+
+        $images = [];
+
+        foreach ($rows as $row) {
+            $media = $this->hydrate($row);
+            $images[$media->productId] = $media;
+        }
+
+        return $images;
+    }
+
     private function hydrate(array $row): ProductMedia
     {
         return new ProductMedia(

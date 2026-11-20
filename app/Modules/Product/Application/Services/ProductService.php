@@ -371,6 +371,89 @@ final readonly class ProductService
         return $this->productMediaRepository->findByProductId($productId);
     }
 
+    public function listAdminProducts(array $filters = []): array
+    {
+        $page = max(1, (int) ($filters['page'] ?? 1));
+
+        $perPage = (int) ($filters['per_page'] ?? 20);
+        $perPage = max(1, min($perPage, 100));
+
+        $search = trim((string) ($filters['search'] ?? ''));
+
+        if (mb_strlen($search) > 120) {
+            throw new InvalidArgumentException(
+                'Search cannot exceed 120 characters.'
+            );
+        }
+
+        $status = $filters['status'] ?? null;
+
+        if ($status !== null && $status !== '') {
+            $status = ProductStatus::tryFrom((string) $status);
+
+            if ($status === null) {
+                throw new InvalidArgumentException(
+                    'Invalid product status.'
+                );
+            }
+
+            $status = $status->value;
+        } else {
+            $status = null;
+        }
+
+        $moderationStatus = $filters['moderation_status'] ?? null;
+
+        if ($moderationStatus !== null && $moderationStatus !== '') {
+            $moderationStatus = ProductModerationStatus::tryFrom(
+                (string) $moderationStatus
+            );
+
+            if ($moderationStatus === null) {
+                throw new InvalidArgumentException(
+                    'Invalid product moderation status.'
+                );
+            }
+
+            $moderationStatus = $moderationStatus->value;
+        } else {
+            $moderationStatus = null;
+        }
+
+        $criteria = [
+            'search' => $search,
+            'status' => $status,
+            'moderation_status' => $moderationStatus,
+        ];
+
+        $total = $this->productRepository->countAdminProducts($criteria);
+
+        $products = $this->productRepository->findAdminProducts(
+            $criteria,
+            $perPage,
+            ($page - 1) * $perPage
+        );
+
+        $primaryImages = $this->productMediaRepository->findPrimaryByProductIds(
+            array_map(
+                static fn(Product $product): string => $product->id,
+                $products
+            )
+        );
+
+
+        return [
+            'items' => $products,
+            'primary_images' => $primaryImages,
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total' => $total,
+                'total_pages' => (int) ceil($total / $perPage),
+            ],
+        ];
+    }
+
     private function assertNonEmpty(
         string $value,
         string $fieldName
