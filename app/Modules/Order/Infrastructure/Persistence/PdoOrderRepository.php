@@ -699,6 +699,453 @@ final readonly class PdoOrderRepository implements OrderRepository
     }
 
 
+    public function cancelAdminOrder(
+        string $orderId,
+        string $adminId,
+        string $reason
+    ): array {
+        $this->db->begin();
+
+        try {
+            /*
+             * 1. Lock the parent order first.
+             *
+             * Payment confirmation follows this same locking order.
+             */
+            $order = $this->db->query(
+                <<<'SQL'
+                SELECT
+                    id,
+                    order_number,
+                    status,
+                    payment_status,
+                    paid_at
+                FROM public.orders
+                WHERE id = :order_id
+                FOR UPDATE
+            SQL,
+                ['order_id' => $orderId]
+            )->fetch();
+
+            if ($order === false) {
+                throw new DomainException('Order not found.');
+            }
+
+            if ($order['status'] === 'cancelled') {
+                throw new DomainException(
+                    'This order has already been cancelled.'
+                );
+            }
+
+            if (
+                $order['status'] !== 'pending_payment'
+                || !in_array(
+                    $order['payment_status'],
+                    ['pending', 'failed'],
+                    true
+                )
+                || $order['paid_at'] !== null
+            ) {
+                throw new DomainException(
+                    'Only unpaid orders awaiting payment can be cancelled through this action.'
+                );
+            }
+
+            /*
+             * 2. Lock every payment attempt for this order.
+             *
+             * A pending or initialized provider payment may still succeed
+             * asynchronously. Do not cancel while such an attempt exists.
+             *
+             * Failed attempts are safe to proceed past.
+             */
+            $payments = $this->db->query(
+                <<<'SQL'
+                SELECT id, status
+                FROM public.payments
+                WHERE order_id = :order_id
+                ORDER BY id
+                FOR UPDATE
+            SQL,
+                ['order_id' => $orderId]
+            )->fetchAll();
+
+            foreach ($payments as $payment) {
+                if ($payment['status'] === 'success') {
+                    throw new DomainException(
+                        'This order has a successful payment and requires the refund workflow.'
+                    );
+                }
+
+                if (
+                    in_array(
+                        $payment['status'],
+                        ['pending', 'initialized'],
+                        true
+                    )
+                ) {
+                    throw new DomainException(
+                        'This order has an active payment attempt. '
+                        . 'Verify its payment status before cancelling the order.'
+                    );
+                }
+
+                if ($payment['status'] !== 'failed') {
+                    throw new DomainException(
+                        'An order payment has an unexpected status. '
+                        . 'Cancellation requires payment reconciliation.'
+                    );
+                }
+            }
+
+            /*
+             * 3. Lock vendor orders and ensure fulfilment has not started.
+             */
+            $vendorOrders = $this->db->query(
+                <<<'SQL'
+                SELECT id, status
+                FROM public.vendor_orders
+                WHERE order_id = :order_id
+                ORDER BY id
+                FOR UPDATE
+            SQL,
+                ['order_id' => $orderId]
+            )->fetchAll();
+
+            if ($vendorOrders === []) {
+                throw new DomainException(
+                    'The order has no vendor orders to cancel.'
+                );
+            }
+
+            foreach ($vendorOrders as $vendorOrder) {
+                if ($vendorOrder['status'] !== 'pending') {
+                    throw new DomainException(
+                        'The order cannot be cancelled because vendor fulfilment has already progressed.'
+                    );
+                }
+            }
+
+            /*
+             * 4. Lock ALL inventory reservations for this order.
+             *
+             * We intentionally do not filter by status here.
+             * A committed or otherwise unexpected reservation must not
+             * be silently ignored during cancellation.
+             */
+            $reservations = $this->db->query(
+                <<<'SQL'
+                SELECT
+                    id,
+                    variant_id,
+                    quantity,
+                    status
+                FROM public.inventory_reservations
+                WHERE order_id = :order_id
+                ORDER BY variant_id, id
+                FOR UPDATE
+            SQL,
+                ['order_id' => $orderId]
+            )->fetchAll();
+
+            if ($reservations === []) {
+                throw new DomainException(
+                    'No inventory reservations were found. '
+                    . 'Order cancellation requires inventory reconciliation.'
+                );
+            }
+
+            foreach ($reservations as $reservation) {
+                if ($reservation['status'] !== 'reserved') {
+                    throw new DomainException(
+                        'An inventory reservation is no longer in the reserved state. '
+                        . 'Order cancellation requires inventory reconciliation.'
+                    );
+                }
+            }
+
+            /*
+             * 5. Release each inventory reservation.
+             */
+            foreach ($reservations as $reservation) {
+                $variantId = $reservation['variant_id'];
+                $quantity = (int) $reservation['quantity'];
+
+                if ($quantity <= 0) {
+                    throw new DomainException(
+                        'An inventory reservation has an invalid quantity.'
+                    );
+                }
+
+                /*
+                 * Lock the inventory row before modifying quantities.
+                 */
+                $inventory = $this->db->query(
+                    <<<'SQL'
+                    SELECT
+                        variant_id,
+                        available_qty,
+                        reserved_qty
+                    FROM public.inventory
+                    WHERE variant_id = :variant_id
+                    FOR UPDATE
+                SQL,
+                    ['variant_id' => $variantId]
+                )->fetch();
+
+                if ($inventory === false) {
+                    throw new DomainException(
+                        'Inventory configuration is missing for variant: '
+                        . $variantId
+                    );
+                }
+
+                $availableBefore = (int) $inventory['available_qty'];
+                $reservedBefore = (int) $inventory['reserved_qty'];
+
+                if ($reservedBefore < $quantity) {
+                    throw new DomainException(
+                        'Reserved inventory is inconsistent. Cancellation was stopped.'
+                    );
+                }
+
+                $availableAfter = $availableBefore + $quantity;
+                $reservedAfter = $reservedBefore - $quantity;
+
+                /*
+                 * Restore available stock and release reserved stock.
+                 */
+                $this->db->query(
+                    <<<'SQL'
+                    UPDATE public.inventory
+                    SET
+                        available_qty = :available_qty,
+                        reserved_qty = :reserved_qty,
+                        updated_at = NOW()
+                    WHERE variant_id = :variant_id
+                SQL,
+                    [
+                        'available_qty' => $availableAfter,
+                        'reserved_qty' => $reservedAfter,
+                        'variant_id' => $variantId,
+                    ]
+                );
+
+                /*
+                 * Mark the reservation as released.
+                 *
+                 * Use updated_at rather than released_at because the
+                 * latter has not been established in the current schema.
+                 */
+                $this->db->query(
+                    <<<'SQL'
+                    UPDATE public.inventory_reservations
+                    SET
+                        status = 'released',
+                        updated_at = NOW()
+                    WHERE id = :reservation_id
+                      AND status = 'reserved'
+                SQL,
+                    ['reservation_id' => $reservation['id']]
+                );
+
+                /*
+                 * Record the release using the existing reservation
+                 * movement type. The reason identifies the operation.
+                 */
+                $this->db->query(
+                    <<<'SQL'
+                    INSERT INTO public.inventory_movements (
+                        variant_id,
+                        movement_type,
+                        quantity_delta,
+                        available_before,
+                        available_after,
+                        reserved_before,
+                        reserved_after,
+                        reason,
+                        reference_type,
+                        reference_id,
+                        actor_user_id
+                    ) VALUES (
+                        :variant_id,
+                        'reservation',
+                        :quantity_delta,
+                        :available_before,
+                        :available_after,
+                        :reserved_before,
+                        :reserved_after,
+                        :reason,
+                        'order',
+                        :reference_id,
+                        :actor_user_id
+                    )
+                SQL,
+                    [
+                        'variant_id' => $variantId,
+                        'quantity_delta' => $quantity,
+                        'available_before' => $availableBefore,
+                        'available_after' => $availableAfter,
+                        'reserved_before' => $reservedBefore,
+                        'reserved_after' => $reservedAfter,
+                        'reason' => 'Admin released inventory reservation after order cancellation.',
+                        'reference_id' => $orderId,
+                        'actor_user_id' => $adminId,
+                    ]
+                );
+            }
+
+            /*
+             * 6. Cancel vendor orders and record their status history.
+             */
+            foreach ($vendorOrders as $vendorOrder) {
+                $this->db->query(
+                    <<<'SQL'
+                    UPDATE public.vendor_orders
+                    SET
+                        status = 'cancelled',
+                        cancelled_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = :vendor_order_id
+                      AND status = 'pending'
+                SQL,
+                    ['vendor_order_id' => $vendorOrder['id']]
+                );
+
+                $this->db->query(
+                    <<<'SQL'
+                    INSERT INTO public.order_status_history (
+                        order_id,
+                        vendor_order_id,
+                        old_status,
+                        new_status,
+                        changed_by,
+                        reason,
+                        metadata,
+                        created_at
+                    ) VALUES (
+                        :order_id,
+                        :vendor_order_id,
+                        :old_status,
+                        'cancelled',
+                        :changed_by,
+                        :reason,
+                        CAST(:metadata AS JSONB),
+                        NOW()
+                    )
+                SQL,
+                    [
+                        'order_id' => $orderId,
+                        'vendor_order_id' => $vendorOrder['id'],
+                        'old_status' => $vendorOrder['status'],
+                        'changed_by' => $adminId,
+                        'reason' => $reason,
+                        'metadata' => json_encode([
+                            'cancellation_source' => 'admin',
+                        ], JSON_THROW_ON_ERROR),
+                    ]
+                );
+            }
+
+            /*
+             * 7. Cancel the parent order.
+             */
+            $this->db->query(
+                <<<'SQL'
+                UPDATE public.orders
+                SET
+                    status = 'cancelled',
+                    updated_at = NOW()
+                WHERE id = :order_id
+                  AND status = 'pending_payment'
+            SQL,
+                ['order_id' => $orderId]
+            );
+
+            /*
+             * Record the parent order status transition.
+             */
+            $this->db->query(
+                <<<'SQL'
+                INSERT INTO public.order_status_history (
+                    order_id,
+                    vendor_order_id,
+                    old_status,
+                    new_status,
+                    changed_by,
+                    reason,
+                    metadata,
+                    created_at
+                ) VALUES (
+                    :order_id,
+                    NULL,
+                    :old_status,
+                    'cancelled',
+                    :changed_by,
+                    :reason,
+                    CAST(:metadata AS JSONB),
+                    NOW()
+                )
+            SQL,
+                [
+                    'order_id' => $orderId,
+                    'old_status' => $order['status'],
+                    'changed_by' => $adminId,
+                    'reason' => $reason,
+                    'metadata' => json_encode([
+                        'cancellation_source' => 'admin',
+                        'inventory_reservations_released' => count($reservations),
+                    ], JSON_THROW_ON_ERROR),
+                ]
+            );
+
+            /*
+             * 8. Publish the cancellation event to the transactional outbox.
+             */
+            $this->outboxEventPublisher->publish(
+                eventType: EventTypes::ORDER_CANCELLED->value,
+                aggregateType: 'order',
+                aggregateId: $orderId,
+                idempotencyKey: EventTypes::ORDER_CANCELLED->value . ':' . $orderId,
+                payload: [
+                    'order_id' => $orderId,
+                    'order_number' => $order['order_number'],
+                    'admin_id' => $adminId,
+                    'reason' => $reason,
+                    'inventory_reservations_released' => count($reservations),
+                ],
+            );
+
+            /*
+             * 9. Retrieve the updated order before committing.
+             *
+             * If retrieval fails, the transaction can still roll back.
+             */
+            $cancelledOrder = $this->findAdminOrder($orderId);
+
+            if ($cancelledOrder === null) {
+                throw new DomainException(
+                    'The cancelled order could not be retrieved.'
+                );
+            }
+
+            $this->db->commit();
+
+            return $cancelledOrder;
+
+        } catch (Throwable $exception) {
+            try {
+                $this->db->rollback();
+            } catch (Throwable) {
+                // Preserve the original exception.
+            }
+
+            throw $exception;
+        }
+    }
+
+
+
     /**
      * Lists parent customer orders for administrative use.
      *
@@ -1121,8 +1568,6 @@ final readonly class PdoOrderRepository implements OrderRepository
 
         return $details;
     }
-
-
 
     private function generateOrderNumber(string $prefix): string
     {

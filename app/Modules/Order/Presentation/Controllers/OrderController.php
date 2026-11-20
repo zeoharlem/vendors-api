@@ -142,4 +142,63 @@ final class OrderController extends Controller
             );
         }
     }
+
+    public function adminCancelAction(): Response
+    {
+        try {
+            $orderId = trim(
+                (string) $this->dispatcher->getParameter('id', '')
+            );
+
+            $adminId = trim(
+                (string) $this->dispatcher->getParameter('userAuthId', '')
+            );
+
+            if ($adminId === '') {
+                return $this->jsonResponder->error(
+                    'UNAUTHORIZED',
+                    'Authentication is required.',
+                    401
+                );
+            }
+
+            $body = $this->request->getJsonRawBody(true);
+
+            if (!is_array($body)) {
+                throw new InvalidArgumentException(
+                    'A valid JSON request body is required.'
+                );
+            }
+
+            $reason = trim((string) ($body['reason'] ?? ''));
+
+            $order = $this->di
+                ->getShared('checkoutService')
+                ->cancelAdminOrder($orderId, $adminId, $reason);
+
+            return $this->jsonResponder->success($order);
+        } catch (InvalidArgumentException $exception) {
+            return $this->jsonResponder->error(
+                'UNPROCESSABLE_ENTITY',
+                $exception->getMessage(),
+                422
+            );
+        } catch (DomainException $exception) {
+            return $this->jsonResponder->error(
+                'CONFLICT',
+                $exception->getMessage(),
+                409
+            );
+        } catch (Throwable $exception) {
+            error_log(
+                'Admin order cancellation failed: ' . (string) $exception
+            );
+
+            return $this->jsonResponder->error(
+                'INTERNAL_SERVER_ERROR',
+                'Unable to cancel the order at this time.',
+                500
+            );
+        }
+    }
 }

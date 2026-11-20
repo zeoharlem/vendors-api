@@ -52,6 +52,40 @@ final readonly class CheckoutService
         );
     }
 
+    public function cancelAdminOrder(
+        string $orderId,
+        string $adminId,
+        string $reason
+    ): array {
+        $orderId = trim($orderId);
+        $adminId = trim($adminId);
+        $reason = trim($reason);
+
+        if ($orderId === '') {
+            throw new InvalidArgumentException('A valid order ID is required.');
+        }
+
+        if ($adminId === '') {
+            throw new InvalidArgumentException('An authenticated administrator is required.');
+        }
+
+        if ($reason === '') {
+            throw new InvalidArgumentException('A cancellation reason is required.');
+        }
+
+        if (mb_strlen($reason) > 1000) {
+            throw new InvalidArgumentException(
+                'Cancellation reason cannot exceed 1000 characters.'
+            );
+        }
+
+        return $this->orderRepository->cancelAdminOrder(
+            $orderId,
+            $adminId,
+            $reason
+        );
+    }
+
     /**
      * Lists parent orders for authorised administrative users.
      */
