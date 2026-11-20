@@ -213,19 +213,19 @@ final readonly class PayoutService
          */
         $this->db->query(
             <<<'SQL'
-            UPDATE public.payouts
-            SET
-                provider_reference = :provider_reference,
-                provider_transfer_id = :provider_transfer_id,
-                provider_response = CAST(:provider_response AS jsonb),
-                updated_at = NOW()
-            WHERE id = :payout_id
-              AND status = 'processing'
+                UPDATE public.payouts
+                SET
+                    provider_reference = :provider_reference,
+                    provider_transfer_id = :provider_transfer_id,
+                    provider_response = CAST(:provider_response AS jsonb),
+                    updated_at = NOW()
+                WHERE id = :payout_id
+                AND status = 'processing'
             SQL,
             [
                 'provider_reference' => $providerReference !== ''
                     ? $providerReference
-                    : null,
+                    : $reference,
                 'provider_transfer_id' => $providerTransferId !== ''
                     ? $providerTransferId
                     : null,
@@ -237,10 +237,7 @@ final readonly class PayoutService
             ]
         );
 
-        if (
-            $providerTransferId === ''
-            || $providerReference === ''
-        ) {
+        if ($providerTransferId === '') {
             throw new RuntimeException(
                 'Paystack accepted or may have accepted the transfer, '
                 . 'but the response did not contain the expected transfer '
@@ -257,6 +254,7 @@ final readonly class PayoutService
         ];
     }
 
+
     private function settleInternalPayout(array $reservation): array
     {
         $payoutId = (string) $reservation['payout_id'];
@@ -264,21 +262,78 @@ final readonly class PayoutService
         $this->db->begin();
 
         try {
+            // Initial lookup only. Do not lock the payout before its payable.
+            $lookupResult = $this->db->query(
+                <<<'SQL'
+                    SELECT
+                        vendor_payable_id,
+                        store_id
+                    FROM public.payouts
+                    WHERE id = :payout_id
+                    LIMIT 1
+                SQL,
+                ['payout_id' => $payoutId]
+            );
+
+            $lookup = $lookupResult->fetch();
+
+            if ($lookup === false) {
+                throw new RuntimeException(
+                    'The internal payout record was not found.'
+                );
+            }
+
+            // Lock order: vendor payable first.
+            $payableResult = $this->db->query(
+                <<<'SQL'
+                    SELECT
+                        vp.id,
+                        vp.vendor_order_id,
+                        vp.store_id,
+                        vp.currency,
+                        vp.gross_minor,
+                        vp.commission_minor,
+                        vp.adjustment_minor,
+                        vp.refund_minor,
+                        vp.payable_minor,
+                        vo.order_id
+                    FROM public.vendor_payables vp
+                    INNER JOIN public.vendor_orders vo
+                        ON vo.id = vp.vendor_order_id
+                    WHERE vp.id = :vendor_payable_id
+                    AND vp.store_id = :store_id
+                    FOR UPDATE OF vp
+                SQL,
+                [
+                    'vendor_payable_id' => $lookup['vendor_payable_id'],
+                    'store_id' => $lookup['store_id'],
+                ]
+            );
+
+            $vendorPayable = $payableResult->fetch();
+
+            if ($vendorPayable === false) {
+                throw new RuntimeException(
+                    'The vendor payable for this payout was not found.'
+                );
+            }
+
+            // Lock order: payout second.
             $payoutResult = $this->db->query(
                 <<<'SQL'
-                SELECT
-                    id,
-                    vendor_payable_id,
-                    store_id,
-                    provider,
-                    amount_minor,
-                    gross_amount_minor,
-                    debt_recovered_minor,
-                    currency,
-                    status
-                FROM public.payouts
-                WHERE id = :payout_id
-                FOR UPDATE
+                    SELECT
+                        id,
+                        vendor_payable_id,
+                        store_id,
+                        provider,
+                        amount_minor,
+                        gross_amount_minor,
+                        debt_recovered_minor,
+                        currency,
+                        status
+                    FROM public.payouts
+                    WHERE id = :payout_id
+                    FOR UPDATE
                 SQL,
                 ['payout_id' => $payoutId]
             );
@@ -291,12 +346,26 @@ final readonly class PayoutService
                 );
             }
 
+            // Revalidate the relationship after obtaining both locks.
+            if (
+                (string) $payout['vendor_payable_id']
+                !== (string) $vendorPayable['id']
+                || (string) $payout['store_id']
+                !== (string) $vendorPayable['store_id']
+            ) {
+                throw new RuntimeException(
+                    'The payout does not belong to the locked vendor payable.'
+                );
+            }
+
             if (
                 (string) $payout['provider'] !== 'internal'
                 || (int) $payout['amount_minor'] !== 0
                 || (int) $payout['debt_recovered_minor'] <= 0
                 || (int) $payout['gross_amount_minor']
                 !== (int) $payout['debt_recovered_minor']
+                || strtoupper((string) $payout['currency'])
+                !== strtoupper((string) $vendorPayable['currency'])
             ) {
                 throw new RuntimeException(
                     'The payout does not qualify for internal debt settlement.'
@@ -319,44 +388,6 @@ final readonly class PayoutService
                 );
             }
 
-            $payableResult = $this->db->query(
-                <<<'SQL'
-                SELECT
-                    vp.id,
-                    vp.vendor_order_id,
-                    vp.store_id,
-                    vp.currency,
-                    vp.gross_minor,
-                    vp.commission_minor,
-                    vp.adjustment_minor,
-                    vp.refund_minor,
-                    vp.payable_minor,
-                    vo.order_id
-                FROM public.vendor_payables vp
-                INNER JOIN public.vendor_orders vo
-                    ON vo.id = vp.vendor_order_id
-                WHERE vp.id = :vendor_payable_id
-                  AND vp.store_id = :store_id
-                FOR UPDATE OF vp
-                SQL,
-                [
-                    'vendor_payable_id' => $payout['vendor_payable_id'],
-                    'store_id' => $payout['store_id'],
-                ]
-            );
-
-            $vendorPayable = $payableResult->fetch();
-
-            if ($vendorPayable === false) {
-                throw new RuntimeException(
-                    'The vendor payable for this payout was not found.'
-                );
-            }
-
-            /*
-             * Post the vendor payable debit and vendor receivable credit.
-             * The adapter calls LedgerPostingService::postVendorPayout().
-             */
             $ledgerResult = $this->ledgerSettlement->postPayout(
                 [
                     'payout_id' => (string) $payout['id'],
@@ -372,9 +403,6 @@ final readonly class PayoutService
                 $vendorPayable
             );
 
-            /*
-             * Only now is the reserved debt actually recovered.
-             */
             $this->vendorDebtRepository->confirmPayoutRecovery(
                 (string) $payout['store_id'],
                 $payoutId,
@@ -393,7 +421,7 @@ final readonly class PayoutService
                 WHERE id = :payout_id
                   AND status = 'pending'
                 RETURNING id
-                SQL,
+            SQL,
                 [
                     'provider_response' => json_encode(
                         [
@@ -430,6 +458,7 @@ final readonly class PayoutService
             throw $exception;
         }
     }
+
 
     private function refreshVendorPayableStatus(
         string $vendorPayableId
