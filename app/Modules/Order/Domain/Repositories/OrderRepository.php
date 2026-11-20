@@ -34,6 +34,20 @@ interface OrderRepository
     public function findAdminOrder(string $orderId): ?array;
 
     /**
+     * Cancels an order administratively.
+     *
+     * The operation must atomically update order statuses, release eligible
+     * inventory reservations, and record the status history.
+     *
+     * @return array The updated order.
+     */
+    public function cancelAdminOrder(
+        string $orderId,
+        string $adminId,
+        string $reason
+    ): array;
+
+    /**
      * Returns a paginated list of all parent orders for administrative use.
      *
      * @return array{

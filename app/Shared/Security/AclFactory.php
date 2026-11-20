@@ -89,6 +89,7 @@ final class AclFactory
             'view_own',
             'view_all',
             'cancel_own',
+            'cancel_all',
             'update',
             'update_fulfillment',
             'confirm_delivery',

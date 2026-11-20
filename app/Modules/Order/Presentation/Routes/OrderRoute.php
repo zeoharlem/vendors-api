@@ -38,5 +38,14 @@ final class OrderRoute
                 'action' => 'adminShow',
             ]
         );
+
+        $api->addPost(
+            '/admin/orders/{id:[0-9a-fA-F-]+}/cancel',
+            [
+                'namespace' => $namespace,
+                'controller' => 'Order',
+                'action' => 'adminCancel',
+            ]
+        );
     }
 }

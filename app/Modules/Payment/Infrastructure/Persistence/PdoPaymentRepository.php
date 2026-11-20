@@ -92,6 +92,60 @@ final class PdoPaymentRepository implements PaymentRepository
         return $row !== false ? $row : null;
     }
 
+    // public function createPendingPayment(
+    //     string $orderId,
+    //     string $provider,
+    //     string $reference,
+    //     int $amountMinor,
+    //     string $currency
+    // ): array {
+    //     $sql = <<<'SQL'
+    //         INSERT INTO public.payments (
+    //             order_id,
+    //             provider,
+    //             reference,
+    //             amount_minor,
+    //             currency,
+    //             status
+    //         ) VALUES (
+    //             :order_id,
+    //             :provider,
+    //             :reference,
+    //             :amount_minor,
+    //             :currency,
+    //             'pending'
+    //         )
+    //         RETURNING
+    //             id,
+    //             order_id,
+    //             provider,
+    //             reference,
+    //             amount_minor,
+    //             currency,
+    //             status,
+    //             created_at
+    //     SQL;
+
+    //     $result = $this->db->query($sql, [
+    //         'order_id' => $orderId,
+    //         'provider' => $provider,
+    //         'reference' => $reference,
+    //         'amount_minor' => $amountMinor,
+    //         'currency' => strtoupper($currency),
+    //     ]);
+
+    //     $payment = $result->fetch();
+
+    //     if ($payment === false) {
+    //         throw new RuntimeException(
+    //             'Unable to create payment record.'
+    //         );
+    //     }
+
+    //     return $payment;
+    // }
+
+
     public function createPendingPayment(
         string $orderId,
         string $provider,
@@ -99,51 +153,98 @@ final class PdoPaymentRepository implements PaymentRepository
         int $amountMinor,
         string $currency
     ): array {
-        $sql = <<<'SQL'
-            INSERT INTO public.payments (
-                order_id,
-                provider,
-                reference,
-                amount_minor,
-                currency,
-                status
-            ) VALUES (
-                :order_id,
-                :provider,
-                :reference,
-                :amount_minor,
-                :currency,
-                'pending'
-            )
-            RETURNING
-                id,
-                order_id,
-                provider,
-                reference,
-                amount_minor,
-                currency,
-                status,
-                created_at
-        SQL;
+        $this->db->begin();
 
-        $result = $this->db->query($sql, [
-            'order_id' => $orderId,
-            'provider' => $provider,
-            'reference' => $reference,
-            'amount_minor' => $amountMinor,
-            'currency' => strtoupper($currency),
-        ]);
-
-        $payment = $result->fetch();
-
-        if ($payment === false) {
-            throw new RuntimeException(
-                'Unable to create payment record.'
+        try {
+            // Lock the parent order first. This serializes payment creation
+            // against admin cancellation and payment confirmation.
+            $result = $this->db->query(
+                <<<'SQL'
+                    SELECT id, status, payment_status
+                    FROM public.orders
+                    WHERE id = :order_id
+                    FOR UPDATE
+                SQL,
+                [
+                    'order_id' => $orderId,
+                ]
             );
-        }
 
-        return $payment;
+            $order = $result->fetch();
+
+            if ($order === false) {
+                throw new RuntimeException(
+                    'The order associated with this payment could not be found.'
+                );
+            }
+
+            if (
+                $order['status'] !== 'pending_payment'
+                || !in_array(
+                    $order['payment_status'],
+                    ['pending', 'failed'],
+                    true
+                )
+            ) {
+                throw new RuntimeException(
+                    'A payment cannot be initialized for this order in its current state.'
+                );
+            }
+
+            $result = $this->db->query(
+                <<<'SQL'
+                    INSERT INTO public.payments (
+                        order_id,
+                        provider,
+                        reference,
+                        amount_minor,
+                        currency,
+                        status
+                    ) VALUES (
+                        :order_id,
+                        :provider,
+                        :reference,
+                        :amount_minor,
+                        :currency,
+                        'pending'
+                    )
+                    RETURNING
+                        id,
+                        order_id,
+                        provider,
+                        reference,
+                        amount_minor,
+                        currency,
+                        status,
+                        created_at
+                SQL,
+                [
+                    'order_id' => $orderId,
+                    'provider' => $provider,
+                    'reference' => $reference,
+                    'amount_minor' => $amountMinor,
+                    'currency' => strtoupper($currency),
+                ]
+            );
+
+            $payment = $result->fetch();
+
+            if ($payment === false) {
+                throw new RuntimeException(
+                    'Unable to create payment record.'
+                );
+            }
+
+            $this->db->commit();
+
+            return $payment;
+        } catch (Throwable $exception) {
+            $this->db->rollback();
+
+            throw $exception;
+        }
     }
+
 
     public function markPaymentInitialized(
         string $reference,
@@ -275,6 +376,395 @@ final class PdoPaymentRepository implements PaymentRepository
         return $row !== false ? $row : null;
     }
 
+    // public function confirmSuccessfulPayment(
+    //     string $reference,
+    //     string $providerTransactionId,
+    //     array $providerResponse
+    // ): array {
+    //     if ($reference === '' || $providerTransactionId === '') {
+    //         throw new RuntimeException(
+    //             'Payment reference and provider transaction ID are required.'
+    //         );
+    //     }
+
+    //     $this->db->begin();
+
+    //     try {
+    //         // Lock the payment first to serialize duplicate confirmations.
+    //         $result = $this->db->query(
+    //             <<<'SQL'
+    //             SELECT *
+    //             FROM public.payments
+    //             WHERE reference = :reference
+    //             FOR UPDATE
+    //         SQL,
+    //             ['reference' => $reference]
+    //         );
+
+    //         $payment = $result->fetch();
+
+    //         if ($payment === false) {
+    //             throw new RuntimeException('Payment not found.');
+    //         }
+
+    //         // Idempotency: an already settled payment must not settle twice.
+    //         if ($payment['status'] === 'success') {
+    //             $this->db->commit();
+
+    //             return $payment;
+    //         }
+
+    //         if (
+    //             !in_array(
+    //                 $payment['status'],
+    //                 ['pending', 'initialized', 'failed'],
+    //                 true
+    //             )
+    //         ) {
+    //             throw new RuntimeException(
+    //                 'Payment cannot be confirmed from its current status.'
+    //             );
+    //         }
+
+    //         // Lock the parent order.
+    //         $result = $this->db->query(
+    //             <<<'SQL'
+    //             SELECT id, status, payment_status
+    //             FROM public.orders
+    //             WHERE id = :order_id
+    //             FOR UPDATE
+    //         SQL,
+    //             ['order_id' => $payment['order_id']]
+    //         );
+
+    //         $order = $result->fetch();
+
+    //         if ($order === false) {
+    //             throw new RuntimeException(
+    //                 'The order associated with this payment could not be found.'
+    //             );
+    //         }
+
+    //         if (
+    //             $order['status'] !== 'pending_payment'
+    //             || !in_array(
+    //                 $order['payment_status'],
+    //                 ['pending', 'failed'],
+    //                 true
+    //             )
+    //         ) {
+    //             throw new RuntimeException(
+    //                 'The order cannot be settled from its current status.'
+    //             );
+    //         }
+
+    //         // Lock all outstanding inventory reservations for this order.
+    //         // Lock all inventory reservations for this order.
+    //         $result = $this->db->query(
+    //             <<<'SQL'
+    //     SELECT
+    //         id,
+    //         order_item_id,
+    //         variant_id,
+    //         quantity,
+    //         status,
+    //         (expires_at <= NOW()) AS is_expired
+    //     FROM public.inventory_reservations
+    //     WHERE order_id = :order_id
+    //     ORDER BY variant_id
+    //     FOR UPDATE
+    // SQL,
+    //             ['order_id' => $payment['order_id']]
+    //         );
+
+    //         $reservations = $result->fetchAll();
+
+    //         if ($reservations === []) {
+    //             throw new RuntimeException(
+    //                 'No inventory reservations were found. Payment requires reconciliation.'
+    //             );
+    //         }
+
+    //         // Validate every reservation before modifying inventory.
+    //         // foreach ($reservations as $reservation) {
+    //         //     if (
+    //         //         $reservation['status'] !== 'reserved' || in_array(
+    //         //             $reservation['is_expired'],
+    //         //             [true, 1, '1', 't', 'true'],
+    //         //             true
+    //         //         )
+    //         //     ) {
+    //         //         throw new RuntimeException(
+    //         //             'An inventory reservation is no longer valid. '
+    //         //             . 'Payment requires reconciliation.'
+    //         //         );
+    //         //     }
+    //         // }
+    //         foreach ($reservations as $reservation) {
+    //             if ($reservation['status'] !== 'reserved') {
+    //                 throw new RuntimeException(
+    //                     'Inventory reservation is no longer available. '
+    //                     . 'Payment requires reconciliation.'
+    //                 );
+    //             }
+    //         }
+
+    //         foreach ($reservations as $reservation) {
+    //             $quantity = (int) $reservation['quantity'];
+    //             $variantId = $reservation['variant_id'];
+
+    //             if ($quantity <= 0) {
+    //                 throw new RuntimeException(
+    //                     'An invalid inventory reservation quantity was found.'
+    //                 );
+    //             }
+
+    //             // Lock the inventory row before changing reserved quantity.
+    //             $result = $this->db->query(
+    //                 <<<'SQL'
+    //                 SELECT available_qty, reserved_qty
+    //                 FROM public.inventory
+    //                 WHERE variant_id = :variant_id
+    //                 FOR UPDATE
+    //             SQL,
+    //                 ['variant_id' => $variantId]
+    //             );
+
+    //             $inventory = $result->fetch();
+
+    //             if ($inventory === false) {
+    //                 throw new RuntimeException(
+    //                     'Inventory record not found for variant: ' . $variantId
+    //                 );
+    //             }
+
+    //             if ((int) $inventory['reserved_qty'] < $quantity) {
+    //                 throw new RuntimeException(
+    //                     'Reserved inventory quantity is insufficient for payment settlement. '
+    //                     . 'Payment requires reconciliation.'
+    //                 );
+    //             }
+
+    //             $availableBefore = (int) $inventory['available_qty'];
+    //             $reservedBefore = (int) $inventory['reserved_qty'];
+
+    //             if ($reservedBefore < $quantity) {
+    //                 throw new RuntimeException(
+    //                     'Reserved inventory is insufficient for variant: '
+    //                     . $variantId
+    //                 );
+    //             }
+
+    //             $reservedAfter = $reservedBefore - $quantity;
+
+    //             $this->db->execute(
+    //                 <<<'SQL'
+    //                 UPDATE public.inventory
+    //                 SET
+    //                     reserved_qty = :reserved_after,
+    //                     updated_at = NOW()
+    //                 WHERE variant_id = :variant_id
+    //             SQL,
+    //                 [
+    //                     'reserved_after' => $reservedAfter,
+    //                     'variant_id' => $variantId,
+    //                 ]
+    //             );
+
+    //             // Record the actual sale movement.
+    //             $this->db->execute(
+    //                 <<<'SQL'
+    //                 INSERT INTO public.inventory_movements (
+    //                     variant_id,
+    //                     movement_type,
+    //                     quantity_delta,
+    //                     available_before,
+    //                     available_after,
+    //                     reserved_before,
+    //                     reserved_after,
+    //                     reason,
+    //                     reference_type,
+    //                     reference_id,
+    //                     actor_user_id
+    //                 ) VALUES (
+    //                     :variant_id,
+    //                     'sale',
+    //                     :quantity_delta,
+    //                     :available_before,
+    //                     :available_after,
+    //                     :reserved_before,
+    //                     :reserved_after,
+    //                     :reason,
+    //                     'order',
+    //                     :order_id,
+    //                     NULL
+    //                 )
+    //             SQL,
+    //                 [
+    //                     'variant_id' => $variantId,
+    //                     'quantity_delta' => -$quantity,
+    //                     'available_before' => $availableBefore,
+    //                     'available_after' => $availableBefore,
+    //                     'reserved_before' => $reservedBefore,
+    //                     'reserved_after' => $reservedAfter,
+    //                     'reason' => 'Inventory committed after successful payment.',
+    //                     'order_id' => $payment['order_id'],
+    //                 ]
+    //             );
+
+    //             // Commit the reservation.
+    //             $this->db->execute(
+    //                 <<<'SQL'
+    //                     UPDATE public.inventory_reservations
+    //                     SET
+    //                         status = 'committed',
+    //                         committed_at = NOW(),
+    //                         updated_at = NOW()
+    //                     WHERE id = :reservation_id
+    //                     AND status = 'reserved'
+    //                 SQL,
+    //                 ['reservation_id' => $reservation['id']]
+    //             );
+    //         }
+
+    //         // Mark the payment successful.
+    //         $this->db->execute(
+    //             <<<'SQL'
+    //             UPDATE public.payments
+    //             SET
+    //                 status = 'success',
+    //                 provider_transaction_id = :transaction_id,
+    //                 provider_response = CAST(:provider_response AS JSONB),
+    //                 verified_at = NOW(),
+    //                 failure_reason = NULL,
+    //                 updated_at = NOW()
+    //             WHERE id = :payment_id
+    //               AND status IN ('pending', 'initialized', 'failed')
+    //         SQL,
+    //             [
+    //                 'transaction_id' => $providerTransactionId,
+    //                 'provider_response' => $this->encodeJson($providerResponse),
+    //                 'payment_id' => $payment['id'],
+    //             ]
+    //         );
+
+    //         // Update the parent order.
+    //         $this->db->execute(
+    //             <<<'SQL'
+    //             UPDATE public.orders
+    //             SET
+    //                 status = 'paid',
+    //                 payment_status = 'paid',
+    //                 paid_at = NOW(),
+    //                 updated_at = NOW()
+    //             WHERE id = :order_id
+    //               AND status = 'pending_payment'
+    //               AND payment_status IN ('pending', 'failed')
+    //         SQL,
+    //             ['order_id' => $payment['order_id']]
+    //         );
+
+    //         // Record the order status transition.
+    //         $this->db->execute(
+    //             <<<'SQL'
+    //             INSERT INTO public.order_status_history (
+    //                 order_id,
+    //                 vendor_order_id,
+    //                 old_status,
+    //                 new_status,
+    //                 changed_by,
+    //                 reason,
+    //                 metadata
+    //             ) VALUES (
+    //                 :order_id,
+    //                 NULL,
+    //                 :old_status,
+    //                 'paid',
+    //                 NULL,
+    //                 'Payment successfully verified.',
+    //                 CAST(:metadata AS JSONB)
+    //             )
+    //         SQL,
+    //             [
+    //                 'order_id' => $payment['order_id'],
+    //                 'old_status' => $order['status'],
+    //                 'metadata' => $this->encodeJson([
+    //                     'payment_id' => $payment['id'],
+    //                     'payment_reference' => $reference,
+    //                     'provider' => $payment['provider'],
+    //                 ]),
+    //             ]
+    //         );
+
+    //         // Retrieve and lock vendor orders with their commission overrides.
+    //         $result = $this->db->query(
+    //             <<<'SQL'
+    //                 SELECT
+    //                     vo.id,
+    //                     vo.order_id,
+    //                     vo.store_id,
+    //                     vo.order_number,
+    //                     vo.status,
+    //                     vo.subtotal_minor,
+    //                     vo.shipping_minor,
+    //                     vo.tax_minor,
+    //                     vo.discount_minor,
+    //                     vo.total_minor,
+    //                     vo.currency,
+    //                     s.commission_rate_bps
+    //                 FROM public.vendor_orders vo
+    //                 INNER JOIN public.stores s
+    //                     ON s.id = vo.store_id
+    //                 WHERE vo.order_id = :order_id
+    //                 ORDER BY vo.id
+    //                 FOR UPDATE OF vo
+    //                 SQL,
+    //             [
+    //                 'order_id' => $payment['order_id'],
+    //             ]
+    //         );
+
+    //         $vendorOrders = $result->fetchAll();
+
+    //         if ($vendorOrders === []) {
+    //             throw new RuntimeException(
+    //                 'No vendor orders were found for this payment.'
+    //             );
+    //         }
+
+    //         $this->ledgerPostingService->postPayment($payment, $vendorOrders);
+
+    //         $this->outboxEventPublisher->publish(
+    //             eventType: EventTypes::PAYMENT_SUCCEEDED->value,
+    //             aggregateType: 'payment',
+    //             aggregateId: (string) $payment['id'],
+    //             idempotencyKey: EventTypes::PAYMENT_SUCCEEDED->value .':'. $payment['id'],
+    //             payload: [
+    //                 'payment_id' => (string) $payment['id'],
+    //                 'order_id' => (string) $payment['order_id'],
+    //                 'reference' => (string) $payment['reference'],
+    //                 'provider' => (string) $payment['provider'],
+    //                 'provider_transaction_id' => $providerTransactionId,
+    //                 'amount_minor' => (int) $payment['amount_minor'],
+    //                 'currency' => (string) $payment['currency'],
+    //             ],
+    //         );
+
+    //         $this->db->commit();
+
+    //         return $this->findByReference($reference)
+    //             ?? throw new RuntimeException(
+    //                 'Confirmed payment could not be retrieved.'
+    //             );
+
+    //     } catch (Throwable $exception) {
+    //         $this->db->rollback();
+
+    //         throw $exception;
+    //     }
+    // }
+
+
     public function confirmSuccessfulPayment(
         string $reference,
         string $providerTransactionId,
@@ -289,7 +779,52 @@ final class PdoPaymentRepository implements PaymentRepository
         $this->db->begin();
 
         try {
-            // Lock the payment first to serialize duplicate confirmations.
+            /*
+             * Read the order ID first without locking the payment.
+             * The parent order is always locked before the payment
+             * to maintain a consistent transaction lock order.
+             */
+            $result = $this->db->query(
+                <<<'SQL'
+                SELECT order_id
+                FROM public.payments
+                WHERE reference = :reference
+                LIMIT 1
+            SQL,
+                ['reference' => $reference]
+            );
+
+            $paymentReference = $result->fetch();
+
+            if ($paymentReference === false) {
+                throw new RuntimeException('Payment not found.');
+            }
+
+            /*
+             * Lock the parent order first.
+             * Admin cancellation uses the same locking order.
+             */
+            $result = $this->db->query(
+                <<<'SQL'
+                SELECT id, status, payment_status
+                FROM public.orders
+                WHERE id = :order_id
+                FOR UPDATE
+            SQL,
+                ['order_id' => $paymentReference['order_id']]
+            );
+
+            $order = $result->fetch();
+
+            if ($order === false) {
+                throw new RuntimeException(
+                    'The order associated with this payment could not be found.'
+                );
+            }
+
+            /*
+             * Lock the payment after locking the parent order.
+             */
             $result = $this->db->query(
                 <<<'SQL'
                 SELECT *
@@ -306,7 +841,9 @@ final class PdoPaymentRepository implements PaymentRepository
                 throw new RuntimeException('Payment not found.');
             }
 
-            // Idempotency: an already settled payment must not settle twice.
+            /*
+             * Idempotency: an already settled payment must not settle twice.
+             */
             if ($payment['status'] === 'success') {
                 $this->db->commit();
 
@@ -325,25 +862,10 @@ final class PdoPaymentRepository implements PaymentRepository
                 );
             }
 
-            // Lock the parent order.
-            $result = $this->db->query(
-                <<<'SQL'
-                SELECT id, status, payment_status
-                FROM public.orders
-                WHERE id = :order_id
-                FOR UPDATE
-            SQL,
-                ['order_id' => $payment['order_id']]
-            );
-
-            $order = $result->fetch();
-
-            if ($order === false) {
-                throw new RuntimeException(
-                    'The order associated with this payment could not be found.'
-                );
-            }
-
+            /*
+             * Do not settle payments for cancelled, paid, or otherwise
+             * ineligible orders.
+             */
             if (
                 $order['status'] !== 'pending_payment'
                 || !in_array(
@@ -357,22 +879,23 @@ final class PdoPaymentRepository implements PaymentRepository
                 );
             }
 
-            // Lock all outstanding inventory reservations for this order.
-            // Lock all inventory reservations for this order.
+            /*
+             * Lock all inventory reservations for this order.
+             */
             $result = $this->db->query(
                 <<<'SQL'
-        SELECT
-            id,
-            order_item_id,
-            variant_id,
-            quantity,
-            status,
-            (expires_at <= NOW()) AS is_expired
-        FROM public.inventory_reservations
-        WHERE order_id = :order_id
-        ORDER BY variant_id
-        FOR UPDATE
-    SQL,
+                SELECT
+                    id,
+                    order_item_id,
+                    variant_id,
+                    quantity,
+                    status,
+                    (expires_at <= NOW()) AS is_expired
+                FROM public.inventory_reservations
+                WHERE order_id = :order_id
+                ORDER BY variant_id, id
+                FOR UPDATE
+            SQL,
                 ['order_id' => $payment['order_id']]
             );
 
@@ -384,30 +907,30 @@ final class PdoPaymentRepository implements PaymentRepository
                 );
             }
 
-            // Validate every reservation before modifying inventory.
-            // foreach ($reservations as $reservation) {
-            //     if (
-            //         $reservation['status'] !== 'reserved' || in_array(
-            //             $reservation['is_expired'],
-            //             [true, 1, '1', 't', 'true'],
-            //             true
-            //         )
-            //     ) {
-            //         throw new RuntimeException(
-            //             'An inventory reservation is no longer valid. '
-            //             . 'Payment requires reconciliation.'
-            //         );
-            //     }
-            // }
+            /*
+             * Validate every reservation before modifying inventory.
+             */
             foreach ($reservations as $reservation) {
-                if ($reservation['status'] !== 'reserved') {
+                $isExpired = in_array(
+                    $reservation['is_expired'],
+                    [true, 1, '1', 't', 'true'],
+                    true
+                );
+
+                if (
+                    $reservation['status'] !== 'reserved'
+                    || $isExpired
+                ) {
                     throw new RuntimeException(
-                        'Inventory reservation is no longer available. '
+                        'An inventory reservation is no longer valid. '
                         . 'Payment requires reconciliation.'
                     );
                 }
             }
 
+            /*
+             * Commit each inventory reservation.
+             */
             foreach ($reservations as $reservation) {
                 $quantity = (int) $reservation['quantity'];
                 $variantId = $reservation['variant_id'];
@@ -418,7 +941,9 @@ final class PdoPaymentRepository implements PaymentRepository
                     );
                 }
 
-                // Lock the inventory row before changing reserved quantity.
+                /*
+                 * Lock the inventory row before changing reserved quantity.
+                 */
                 $result = $this->db->query(
                     <<<'SQL'
                     SELECT available_qty, reserved_qty
@@ -437,20 +962,13 @@ final class PdoPaymentRepository implements PaymentRepository
                     );
                 }
 
-                if ((int) $inventory['reserved_qty'] < $quantity) {
-                    throw new RuntimeException(
-                        'Reserved inventory quantity is insufficient for payment settlement. '
-                        . 'Payment requires reconciliation.'
-                    );
-                }
-
                 $availableBefore = (int) $inventory['available_qty'];
                 $reservedBefore = (int) $inventory['reserved_qty'];
 
                 if ($reservedBefore < $quantity) {
                     throw new RuntimeException(
-                        'Reserved inventory is insufficient for variant: '
-                        . $variantId
+                        'Reserved inventory quantity is insufficient for payment settlement. '
+                        . 'Payment requires reconciliation.'
                     );
                 }
 
@@ -470,7 +988,9 @@ final class PdoPaymentRepository implements PaymentRepository
                     ]
                 );
 
-                // Record the actual sale movement.
+                /*
+                 * Record the actual sale movement.
+                 */
                 $this->db->execute(
                     <<<'SQL'
                     INSERT INTO public.inventory_movements (
@@ -511,22 +1031,26 @@ final class PdoPaymentRepository implements PaymentRepository
                     ]
                 );
 
-                // Commit the reservation.
+                /*
+                 * Commit the reservation.
+                 */
                 $this->db->execute(
                     <<<'SQL'
-                        UPDATE public.inventory_reservations
-                        SET
-                            status = 'committed',
-                            committed_at = NOW(),
-                            updated_at = NOW()
-                        WHERE id = :reservation_id
-                        AND status = 'reserved'
-                    SQL,
+                    UPDATE public.inventory_reservations
+                    SET
+                        status = 'committed',
+                        committed_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = :reservation_id
+                      AND status = 'reserved'
+                SQL,
                     ['reservation_id' => $reservation['id']]
                 );
             }
 
-            // Mark the payment successful.
+            /*
+             * Mark the payment successful.
+             */
             $this->db->execute(
                 <<<'SQL'
                 UPDATE public.payments
@@ -547,7 +1071,9 @@ final class PdoPaymentRepository implements PaymentRepository
                 ]
             );
 
-            // Update the parent order.
+            /*
+             * Update the parent order.
+             */
             $this->db->execute(
                 <<<'SQL'
                 UPDATE public.orders
@@ -563,7 +1089,9 @@ final class PdoPaymentRepository implements PaymentRepository
                 ['order_id' => $payment['order_id']]
             );
 
-            // Record the order status transition.
+            /*
+             * Record the order status transition.
+             */
             $this->db->execute(
                 <<<'SQL'
                 INSERT INTO public.order_status_history (
@@ -595,29 +1123,31 @@ final class PdoPaymentRepository implements PaymentRepository
                 ]
             );
 
-            // Retrieve and lock vendor orders with their commission overrides.
+            /*
+             * Retrieve and lock vendor orders with their commission overrides.
+             */
             $result = $this->db->query(
                 <<<'SQL'
-                    SELECT
-                        vo.id,
-                        vo.order_id,
-                        vo.store_id,
-                        vo.order_number,
-                        vo.status,
-                        vo.subtotal_minor,
-                        vo.shipping_minor,
-                        vo.tax_minor,
-                        vo.discount_minor,
-                        vo.total_minor,
-                        vo.currency,
-                        s.commission_rate_bps
-                    FROM public.vendor_orders vo
-                    INNER JOIN public.stores s
-                        ON s.id = vo.store_id
-                    WHERE vo.order_id = :order_id
-                    ORDER BY vo.id
-                    FOR UPDATE OF vo
-                    SQL,
+                SELECT
+                    vo.id,
+                    vo.order_id,
+                    vo.store_id,
+                    vo.order_number,
+                    vo.status,
+                    vo.subtotal_minor,
+                    vo.shipping_minor,
+                    vo.tax_minor,
+                    vo.discount_minor,
+                    vo.total_minor,
+                    vo.currency,
+                    s.commission_rate_bps
+                FROM public.vendor_orders vo
+                INNER JOIN public.stores s
+                    ON s.id = vo.store_id
+                WHERE vo.order_id = :order_id
+                ORDER BY vo.id
+                FOR UPDATE OF vo
+            SQL,
                 [
                     'order_id' => $payment['order_id'],
                 ]
@@ -633,11 +1163,14 @@ final class PdoPaymentRepository implements PaymentRepository
 
             $this->ledgerPostingService->postPayment($payment, $vendorOrders);
 
+            /*
+             * Publish the payment event to the outbox.
+             */
             $this->outboxEventPublisher->publish(
                 eventType: EventTypes::PAYMENT_SUCCEEDED->value,
                 aggregateType: 'payment',
                 aggregateId: (string) $payment['id'],
-                idempotencyKey: EventTypes::PAYMENT_SUCCEEDED->value .':'. $payment['id'],
+                idempotencyKey: EventTypes::PAYMENT_SUCCEEDED->value . ':' . $payment['id'],
                 payload: [
                     'payment_id' => (string) $payment['id'],
                     'order_id' => (string) $payment['order_id'],
