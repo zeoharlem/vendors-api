@@ -5,14 +5,16 @@ declare(strict_types=1);
 namespace App\Modules\Payment\Infrastructure\Persistence;
 
 use App\Modules\Payment\Domain\Repositories\VendorDebtRepositoryInterface;
+use DomainException;
 use InvalidArgumentException;
+use JsonException;
 use Phalcon\Contracts\Db\Adapter\Adapter as AdapterInterface;
 use RuntimeException;
 
 final readonly class PdoVendorDebtRepository implements VendorDebtRepositoryInterface
 {
     public function __construct(
-        private AdapterInterface $db
+        private AdapterInterface $db,
     ) {
     }
 
@@ -21,311 +23,85 @@ final readonly class PdoVendorDebtRepository implements VendorDebtRepositoryInte
         string $refundId,
         string $vendorOrderId,
         string $currency,
-        int $amountMinor
+        int $amountMinor,
     ): int {
-        $this->validateAmount($amountMinor);
-
+        $storeId = trim($storeId);
+        $refundId = trim($refundId);
+        $vendorOrderId = trim($vendorOrderId);
         $currency = strtoupper(trim($currency));
-
-        if ($currency === '') {
-            throw new InvalidArgumentException('Currency is required.');
-        }
-
-        $result = $this->db->query(
-            <<<'SQL'
-            WITH inserted AS (
-                INSERT INTO public.vendor_debt_entries (
-                    store_id,
-                    currency,
-                    entry_type,
-                    amount_minor,
-                    refund_id,
-                    idempotency_key,
-                    metadata
-                )
-                VALUES (
-                    :store_id,
-                    :currency,
-                    'refund_debt_created',
-                    :amount_minor,
-                    :refund_id,
-                    :idempotency_key,
-                    CAST(:metadata AS JSONB)
-                )
-                ON CONFLICT (idempotency_key) DO NOTHING
-                RETURNING store_id, currency, amount_minor
-            ),
-            balance AS (
-                INSERT INTO public.vendor_debt_balances (
-                    store_id,
-                    currency,
-                    outstanding_minor
-                )
-                SELECT store_id, currency, amount_minor
-                FROM inserted
-                ON CONFLICT (store_id, currency)
-                DO UPDATE SET
-                    outstanding_minor =
-                        public.vendor_debt_balances.outstanding_minor
-                        + EXCLUDED.outstanding_minor,
-                    updated_at = NOW()
-                RETURNING outstanding_minor
-            )
-            SELECT outstanding_minor FROM balance
-            SQL,
-            [
-                'store_id' => $storeId,
-                'currency' => $currency,
-                'amount_minor' => $amountMinor,
-                'refund_id' => $refundId,
-                'idempotency_key' => 'refund-debt:' . $refundId,
-                'metadata' => json_encode(
-                    ['vendor_order_id' => $vendorOrderId],
-                    JSON_THROW_ON_ERROR
-                ),
-            ]
-        );
-
-        $row = $result->fetch();
-
-        if ($row !== false) {
-            return $amountMinor;
-        }
-
-        /*
-         * The idempotency key already exists.
-         * Do not increase the debt balance a second time.
-         */
-        $existing = $this->db->query(
-            <<<'SQL'
-            SELECT amount_minor
-            FROM public.vendor_debt_entries
-            WHERE idempotency_key = :idempotency_key
-              AND store_id = :store_id
-              AND refund_id = :refund_id
-            LIMIT 1
-            SQL,
-            [
-                'idempotency_key' => 'refund-debt:' . $refundId,
-                'store_id' => $storeId,
-                'refund_id' => $refundId,
-            ]
-        )->fetch();
 
         if (
-            $existing === false
-            || (int) $existing['amount_minor'] !== $amountMinor
+            $storeId === ''
+            || $refundId === ''
+            || $vendorOrderId === ''
         ) {
-            throw new RuntimeException(
-                'Refund debt idempotency conflict.'
-            );
-        }
-
-        return 0;
-    }
-
-    public function recoverAgainstPayout(
-        string $storeId,
-        string $payoutId,
-        string $currency,
-        int $grossPayoutMinor
-    ): int {
-        $this->validateAmount($grossPayoutMinor);
-
-        $currency = strtoupper(trim($currency));
-
-        $result = $this->db->query(
-            <<<'SQL'
-            SELECT outstanding_minor
-            FROM public.vendor_debt_balances
-            WHERE store_id = :store_id
-              AND currency = :currency
-            FOR UPDATE
-            SQL,
-            [
-                'store_id' => $storeId,
-                'currency' => $currency,
-            ]
-        );
-
-        $balance = $result->fetch();
-
-        if ($balance === false) {
-            return 0;
-        }
-
-        $outstandingMinor = (int) $balance['outstanding_minor'];
-
-        $recoveryMinor = min(
-            $grossPayoutMinor,
-            $outstandingMinor
-        );
-
-        if ($recoveryMinor <= 0) {
-            return 0;
-        }
-
-        $idempotencyKey = 'payout-debt:' . $payoutId;
-
-        $existing = $this->db->query(
-            <<<'SQL'
-            SELECT amount_minor
-            FROM public.vendor_debt_entries
-            WHERE idempotency_key = :idempotency_key
-            LIMIT 1
-            SQL,
-            [
-                'idempotency_key' => $idempotencyKey,
-            ]
-        )->fetch();
-
-        if ($existing !== false) {
-            return (int) $existing['amount_minor'];
-        }
-
-        $updated = $this->db->query(
-            <<<'SQL'
-            UPDATE public.vendor_debt_balances
-            SET
-                outstanding_minor = outstanding_minor - :amount_minor,
-                updated_at = NOW()
-            WHERE store_id = :store_id
-              AND currency = :currency
-              AND outstanding_minor >= :amount_minor
-            RETURNING outstanding_minor
-            SQL,
-            [
-                'amount_minor' => $recoveryMinor,
-                'store_id' => $storeId,
-                'currency' => $currency,
-            ]
-        )->fetch();
-
-        if ($updated === false) {
-            throw new RuntimeException(
-                'Vendor debt balance could not be reduced safely.'
-            );
-        }
-
-        $this->db->query(
-            <<<'SQL'
-            INSERT INTO public.vendor_debt_entries (
-                store_id,
-                currency,
-                entry_type,
-                amount_minor,
-                payout_id,
-                idempotency_key,
-                metadata
-            )
-            VALUES (
-                :store_id,
-                :currency,
-                'payout_debt_recovered',
-                :amount_minor,
-                :payout_id,
-                :idempotency_key,
-                CAST(:metadata AS JSONB)
-            )
-            SQL,
-            [
-                'store_id' => $storeId,
-                'currency' => $currency,
-                'amount_minor' => $recoveryMinor,
-                'payout_id' => $payoutId,
-                'idempotency_key' => $idempotencyKey,
-                'metadata' => json_encode(
-                    ['gross_payout_minor' => $grossPayoutMinor],
-                    JSON_THROW_ON_ERROR
-                ),
-            ]
-        );
-
-        return $recoveryMinor;
-    }
-
-    public function outstandingBalance(
-        string $storeId,
-        string $currency
-    ): int {
-        $result = $this->db->query(
-            <<<'SQL'
-            SELECT outstanding_minor
-            FROM public.vendor_debt_balances
-            WHERE store_id = :store_id
-              AND currency = :currency
-            LIMIT 1
-            SQL,
-            [
-                'store_id' => $storeId,
-                'currency' => strtoupper(trim($currency)),
-            ]
-        );
-
-        $row = $result->fetch();
-
-        return $row === false
-            ? 0
-            : (int) $row['outstanding_minor'];
-    }
-
-
-    public function restorePayoutRecovery(
-        string $storeId,
-        string $payoutId,
-        string $currency
-    ): int {
-        $currency = strtoupper(trim($currency));
-
-        if ($storeId === '' || $payoutId === '' || $currency === '') {
             throw new InvalidArgumentException(
-                'Store, payout and currency are required.'
+                'Store, refund and vendor order are required.'
             );
         }
 
-        $idempotencyKey = 'payout-debt-restored:' . $payoutId;
+        if (!preg_match('/^[A-Z]{3}$/', $currency)) {
+            throw new InvalidArgumentException(
+                'A valid three-letter currency is required.'
+            );
+        }
+
+        if ($amountMinor <= 0) {
+            throw new InvalidArgumentException(
+                'Refund debt amount must be greater than zero.'
+            );
+        }
+
+        $idempotencyKey = 'refund-debt:' . $refundId;
+
+        try {
+            $metadata = json_encode(
+                [
+                    'vendor_order_id' => $vendorOrderId,
+                ],
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES,
+            );
+        } catch (JsonException $exception) {
+            throw new RuntimeException(
+                'Unable to encode refund debt metadata.',
+                previous: $exception,
+            );
+        }
 
         /*
-         * Restore only the amount originally recovered against this payout.
+         * Insert the debt entry and update the vendor balance atomically.
          *
-         * The unique idempotency key ensures the balance is restored once,
-         * even if Paystack sends the same event more than once.
+         * If the idempotency key already exists, the INSERT returns no rows,
+         * so the balance is not incremented.
          */
         $result = $this->db->query(
             <<<'SQL'
-                WITH original AS (
-                    SELECT
-                        store_id,
-                        currency,
-                        amount_minor
-                    FROM public.vendor_debt_entries
-                    WHERE payout_id = :payout_id
-                    AND store_id = :store_id
-                    AND currency = :currency
-                    AND entry_type = 'payout_debt_recovered'
-                    LIMIT 1
-                ),
-                inserted AS (
+                WITH inserted AS (
                     INSERT INTO public.vendor_debt_entries (
                         store_id,
                         currency,
                         entry_type,
                         amount_minor,
+                        refund_id,
                         payout_id,
                         idempotency_key,
                         metadata
                     )
-                    SELECT
-                        store_id,
-                        currency,
-                        'payout_debt_recovery_restored',
-                        amount_minor,
-                        :payout_id,
+                    VALUES (
+                        :store_id,
+                        :currency,
+                        'refund_debt_created',
+                        :amount_minor,
+                        :refund_id,
+                        NULL,
                         :idempotency_key,
                         CAST(:metadata AS JSONB)
-                    FROM original
+                    )
                     ON CONFLICT (idempotency_key) DO NOTHING
-                    RETURNING store_id, currency, amount_minor
+                    RETURNING
+                        store_id,
+                        currency,
+                        amount_minor
                 ),
                 balance AS (
                     INSERT INTO public.vendor_debt_balances (
@@ -346,91 +122,69 @@ final readonly class PdoVendorDebtRepository implements VendorDebtRepositoryInte
                         updated_at = NOW()
                     RETURNING outstanding_minor
                 )
-                SELECT amount_minor
+                SELECT inserted.amount_minor
                 FROM inserted
+                CROSS JOIN balance
             SQL,
             [
-                'payout_id' => $payoutId,
                 'store_id' => $storeId,
                 'currency' => $currency,
+                'amount_minor' => $amountMinor,
+                'refund_id' => $refundId,
                 'idempotency_key' => $idempotencyKey,
-                'metadata' => json_encode(
-                    [
-                        'reason' => 'payout_recovery_restored',
-                        'payout_id' => $payoutId,
-                    ],
-                    JSON_THROW_ON_ERROR
-                ),
-            ]
+                'metadata' => $metadata,
+            ],
         );
 
-        $restored = $result->fetch();
+        $inserted = $result->fetch();
 
-        if ($restored !== false) {
-            return (int) $restored['amount_minor'];
+        if ($inserted !== false) {
+            return (int) $inserted['amount_minor'];
         }
 
         /*
-         * No row can mean either:
-         * - No debt was recovered for this payout; or
-         * - This restoration was already recorded.
+         * The idempotency key already exists.
+         *
+         * Verify that it represents the exact same refund debt operation.
          */
         $existing = $this->db->query(
             <<<'SQL'
-                SELECT amount_minor
+                SELECT
+                    store_id,
+                    currency,
+                    entry_type,
+                    amount_minor,
+                    refund_id,
+                    payout_id,
+                    metadata->>'vendor_order_id' AS vendor_order_id
                 FROM public.vendor_debt_entries
                 WHERE idempotency_key = :idempotency_key
-                AND payout_id = :payout_id
-                AND store_id = :store_id
-                AND currency = :currency
-                AND entry_type = 'payout_debt_recovery_restored'
                 LIMIT 1
             SQL,
             [
                 'idempotency_key' => $idempotencyKey,
-                'payout_id' => $payoutId,
-                'store_id' => $storeId,
-                'currency' => $currency,
-            ]
+            ],
         )->fetch();
 
-        if ($existing !== false) {
-            return 0;
-        }
-
-        $original = $this->db->query(
-            <<<'SQL'
-                SELECT id
-                FROM public.vendor_debt_entries
-                WHERE payout_id = :payout_id
-                AND store_id = :store_id
-                AND currency = :currency
-                AND entry_type = 'payout_debt_recovered'
-                LIMIT 1
-            SQL,
-            [
-                'payout_id' => $payoutId,
-                'store_id' => $storeId,
-                'currency' => $currency,
-            ]
-        )->fetch();
-
-        if ($original === false) {
-            return 0;
-        }
-
-        throw new RuntimeException(
-            'Unable to restore the vendor debt recovery. Manual reconciliation is required.'
-        );
-    }
-
-
-    private function validateAmount(int $amountMinor): void
-    {
-        if ($amountMinor <= 0) {
-            throw new InvalidArgumentException(
-                'The amount must be greater than zero.'
+        if (
+            $existing === false
+            || (string) $existing['store_id'] !== $storeId
+            || strtoupper(trim((string) $existing['currency'])) !== $currency
+            || (string) $existing['entry_type'] !== 'refund_debt_created'
+            || (int) $existing['amount_minor'] !== $amountMinor
+            || (string) $existing['refund_id'] !== $refundId
+            || $existing['payout_id'] !== null
+            || (string) $existing['vendor_order_id'] !== $vendorOrderId
+        ) {
+            throw new DomainException(
+                'Refund debt idempotency conflict.'
             );
         }
+
+        /*
+         * This refund debt was already recorded.
+         * Do not increment the vendor balance again.
+         */
+        return 0;
     }
 }

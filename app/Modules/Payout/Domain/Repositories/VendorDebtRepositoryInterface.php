@@ -6,14 +6,6 @@ namespace App\Modules\Payout\Domain\Repositories;
 
 interface VendorDebtRepositoryInterface
 {
-    public function recordRefundDebt(
-        string $storeId,
-        string $refundId,
-        string $vendorOrderId,
-        string $currency,
-        int $amountMinor
-    ): int;
-
     public function reserveAgainstPayout(
         string $storeId,
         string $payoutId,

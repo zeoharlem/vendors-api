@@ -18,34 +18,4 @@ interface VendorDebtRepositoryInterface
         int $amountMinor
     ): int;
 
-    /**
-     * Apply outstanding vendor debt against a payout.
-     * Returns the amount deducted from the vendor's payout.
-     * Must run inside the caller's active database transaction.
-     */
-    public function recoverAgainstPayout(
-        string $storeId,
-        string $payoutId,
-        string $currency,
-        int $grossPayoutMinor
-    ): int;
-
-    public function outstandingBalance(
-        string $storeId,
-        string $currency
-    ): int;
-
-
-    /**
-     * Restore debt previously recovered against a payout.
-     *
-     * Used when a payout fails or a successful payout is reversed.
-     * Must run inside the caller's active database transaction.
-     */
-    public function restorePayoutRecovery(
-        string $storeId,
-        string $payoutId,
-        string $currency
-    ): int;
-
 }

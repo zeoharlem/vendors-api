@@ -132,6 +132,7 @@ use App\Modules\Payout\Domain\Contracts\PayoutLedgerSettlementInterface;
 use App\Modules\Payout\Domain\Contracts\PayoutProviderInterface;
 use App\Modules\Payout\Domain\Repositories\PayoutRepositoryInterface;
 use App\Modules\Payout\Domain\Repositories\VendorDebtRepositoryInterface;
+use App\Modules\Payment\Domain\Repositories\VendorDebtRepositoryInterface as PaymentVendorDebtRepositoryInterface;
 use App\Modules\Payout\Domain\Repositories\VendorPayoutAccountRepositoryInterface;
 use App\Modules\Payout\Infrastructure\Ledger\LedgerPayoutSettlement;
 use App\Modules\Payout\Infrastructure\Persistence\PdoPayoutRepository;
@@ -880,7 +881,8 @@ final class ApplicationFactory
             PaystackRefundWebhookService::class,
             function () use ($di) {
                 return new PaystackRefundWebhookService(
-                    $di->getShared(PaymentRepository::class),
+                    //$di->getShared(PaymentRepository::class),
+                    $di->getShared('paymentRepository'),
                 );
             }
         );
@@ -895,8 +897,17 @@ final class ApplicationFactory
 
         // Vendor debt repository
         $di->setShared(
+            PaymentVendorDebtRepositoryInterface::class,
+            function () use ($di) {
+                return new \App\Modules\Payment\Infrastructure\Persistence\PdoVendorDebtRepository(
+                    $di->getShared('db')
+                );
+            }
+        );
+
+        $di->setShared(
             VendorDebtRepositoryInterface::class,
-            function () use ($di): VendorDebtRepositoryInterface {
+            function () use ($di) {
                 return new PdoVendorDebtRepository($di->getShared('db'));
             }
         );
