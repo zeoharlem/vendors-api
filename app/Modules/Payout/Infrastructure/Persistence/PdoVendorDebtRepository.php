@@ -160,6 +160,8 @@ final readonly class PdoVendorDebtRepository implements VendorDebtRepositoryInte
 
         $this->ensureBalanceExists($storeId, $currency);
 
+        $balance = $this->lockBalance($storeId, $currency);
+
         $existing = $this->findEntryByIdempotencyKey($idempotencyKey);
 
         if ($existing !== null) {
@@ -175,8 +177,6 @@ final readonly class PdoVendorDebtRepository implements VendorDebtRepositoryInte
 
             return (int) $existing['amount_minor'];
         }
-
-        $balance = $this->lockBalance($storeId, $currency);
 
         $outstanding = (int) $balance['outstanding_minor'];
         $reserved = (int) $balance['reserved_minor'];
@@ -594,6 +594,162 @@ final readonly class PdoVendorDebtRepository implements VendorDebtRepositoryInte
 
         return $row === false ? null : $row;
     }
+
+
+    public function restorePayoutRecovery(
+        string $storeId,
+        string $payoutId,
+        string $currency
+    ): int {
+        $currency = strtoupper(trim($currency));
+
+        if ($storeId === '' || $payoutId === '' || $currency === '') {
+            throw new InvalidArgumentException(
+                'Store, payout and currency are required.'
+            );
+        }
+
+        $idempotencyKey = 'payout-debt-restored:' . $payoutId;
+
+        /*
+         * Restore only the amount originally recovered against this payout.
+         *
+         * The unique idempotency key ensures the balance is restored once,
+         * even if Paystack sends the same event more than once.
+         */
+        $result = $this->db->query(
+            <<<'SQL'
+                WITH original AS (
+                    SELECT
+                        store_id,
+                        currency,
+                        amount_minor
+                    FROM public.vendor_debt_entries
+                    WHERE payout_id = :payout_id
+                    AND store_id = :store_id
+                    AND currency = :currency
+                    AND entry_type = 'payout_debt_recovered'
+                    LIMIT 1
+                ),
+                inserted AS (
+                    INSERT INTO public.vendor_debt_entries (
+                        store_id,
+                        currency,
+                        entry_type,
+                        amount_minor,
+                        payout_id,
+                        idempotency_key,
+                        metadata
+                    )
+                    SELECT
+                        store_id,
+                        currency,
+                        'payout_debt_recovery_restored',
+                        amount_minor,
+                        :payout_id,
+                        :idempotency_key,
+                        CAST(:metadata AS JSONB)
+                    FROM original
+                    ON CONFLICT (idempotency_key) DO NOTHING
+                    RETURNING store_id, currency, amount_minor
+                ),
+                balance AS (
+                    INSERT INTO public.vendor_debt_balances (
+                        store_id,
+                        currency,
+                        outstanding_minor
+                    )
+                    SELECT
+                        store_id,
+                        currency,
+                        amount_minor
+                    FROM inserted
+                    ON CONFLICT (store_id, currency)
+                    DO UPDATE SET
+                        outstanding_minor =
+                            public.vendor_debt_balances.outstanding_minor
+                            + EXCLUDED.outstanding_minor,
+                        updated_at = NOW()
+                    RETURNING outstanding_minor
+                )
+                SELECT amount_minor
+                FROM inserted
+            SQL,
+            [
+                'payout_id' => $payoutId,
+                'store_id' => $storeId,
+                'currency' => $currency,
+                'idempotency_key' => $idempotencyKey,
+                'metadata' => json_encode(
+                    [
+                        'reason' => 'payout_recovery_restored',
+                        'payout_id' => $payoutId,
+                    ],
+                    JSON_THROW_ON_ERROR
+                ),
+            ]
+        );
+
+        $restored = $result->fetch();
+
+        if ($restored !== false) {
+            return (int) $restored['amount_minor'];
+        }
+
+        /*
+         * No row can mean either:
+         * - No debt was recovered for this payout; or
+         * - This restoration was already recorded.
+         */
+        $existing = $this->db->query(
+            <<<'SQL'
+                SELECT amount_minor
+                FROM public.vendor_debt_entries
+                WHERE idempotency_key = :idempotency_key
+                AND payout_id = :payout_id
+                AND store_id = :store_id
+                AND currency = :currency
+                AND entry_type = 'payout_debt_recovery_restored'
+                LIMIT 1
+            SQL,
+            [
+                'idempotency_key' => $idempotencyKey,
+                'payout_id' => $payoutId,
+                'store_id' => $storeId,
+                'currency' => $currency,
+            ]
+        )->fetch();
+
+        if ($existing !== false) {
+            return 0;
+        }
+
+        $original = $this->db->query(
+            <<<'SQL'
+                SELECT id
+                FROM public.vendor_debt_entries
+                WHERE payout_id = :payout_id
+                AND store_id = :store_id
+                AND currency = :currency
+                AND entry_type = 'payout_debt_recovered'
+                LIMIT 1
+            SQL,
+            [
+                'payout_id' => $payoutId,
+                'store_id' => $storeId,
+                'currency' => $currency,
+            ]
+        )->fetch();
+
+        if ($original === false) {
+            return 0;
+        }
+
+        throw new RuntimeException(
+            'Unable to restore the vendor debt recovery. Manual reconciliation is required.'
+        );
+    }
+
 
     private function assertEntryMatches(
         array $entry,

@@ -144,7 +144,7 @@ final readonly class PdoPayoutReservationRepository
              */
             $insertResult = $this->db->query(
                 <<<'SQL'
-                INSERT INTO public.payouts (
+                    INSERT INTO public.payouts (
                     vendor_payable_id,
                     store_id,
                     provider,
@@ -168,6 +168,7 @@ final readonly class PdoPayoutReservationRepository
                     'pending',
                     NULL
                 )
+                ON CONFLICT (idempotency_key) DO NOTHING
                 RETURNING id
                 SQL,
                 [
@@ -183,9 +184,19 @@ final readonly class PdoPayoutReservationRepository
             $inserted = $insertResult->fetch();
 
             if ($inserted === false) {
-                throw new RuntimeException(
-                    'Unable to create payout reservation.'
-                );
+                $existing = $this->findByIdempotencyKey($idempotencyKey);
+
+                if ($existing === null) {
+                    throw new RuntimeException(
+                        'Unable to create or retrieve the payout reservation.'
+                    );
+                }
+                $this->assertExistingPayoutMatches($existing, $storeId, $vendorPayableId);
+                $result = $this->hydrateReservation($existing, true);
+
+                $this->db->commit();
+
+                return $result;
             }
 
             $payoutId = (string) $inserted['id'];
