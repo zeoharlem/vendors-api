@@ -271,6 +271,7 @@ final class ProductController extends Controller
     }
 
 
+
     public function adminIndexAction()
     {
         try {
@@ -302,13 +303,15 @@ final class ProductController extends Controller
 
             $result = $this->productService()->listAdminProducts($filters);
 
+            $primaryImages = $result['primary_images'];
+
             return $this->jsonResponder->success([
                 'items' => array_map(
                     fn(Product $product): array =>
                         $this->serializeProductSummary(
-                        $product,
-                        $primaryImages[$product->id] ?? null
-                    ),
+                            $product,
+                            $primaryImages[$product->id] ?? null
+                        ),
                     $result['items']
                 ),
                 'pagination' => $result['pagination'],
@@ -464,6 +467,45 @@ final class ProductController extends Controller
                 $this->productService()->getImages($product->id)
             ),
         ];
+    }
+
+    public function adminShowAction()
+    {
+        try {
+            $productId = (string) $this->dispatcher->getParameter('id');
+
+            if (trim($productId) === '') {
+                throw new InvalidArgumentException(
+                    'Product ID is required.'
+                );
+            }
+
+            $product = $this->productService()->getById($productId);
+
+            return $this->jsonResponder->success([
+                'product' => $this->serializeProduct($product),
+            ]);
+        } catch (InvalidArgumentException $e) {
+            return $this->jsonResponder->error(
+                'BAD_REQUEST',
+                $e->getMessage(),
+                400
+            );
+        } catch (ProductNotFoundException $e) {
+            return $this->jsonResponder->error(
+                'NOT_FOUND',
+                'Product not found.',
+                404
+            );
+        } catch (Throwable $e) {
+            $this->logException($e);
+
+            return $this->jsonResponder->error(
+                'INTERNAL_SERVER_ERROR',
+                'Unable to retrieve product.',
+                500
+            );
+        }
     }
 
     private function formatDate(?DateTimeInterface $date): ?string
