@@ -104,5 +104,11 @@ final class ProductRoutes
                 'action' => 'adminIndex',
             ]
         );
+
+        $api->addGet('/admin/products/{id}', [
+            'namespace' => $namespace,
+            'controller' => 'Product',
+            'action' => 'adminShow',
+        ]);
     }
 }

@@ -25,8 +25,10 @@ final class AuthorizationMiddleware
     private const PERMISSIONS = [
         'product' => [
             'index' => ['products', 'view'],
+            'adminindex' => ['products', 'view_all'],
+            'adminshow' => ['products', 'view_all'],
             'show' => ['products', 'view'],
-            'manageShow' => ['products', 'view'],
+            'manageshow' => ['products', 'view'],
             'create' => ['products', 'create'],
             'update' => ['products', 'update'],
             'archive' => ['products', 'delete'],

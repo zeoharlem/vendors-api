@@ -68,6 +68,7 @@ final class AclFactory
         'cart' => ['view', 'manage'],
         'products' => [
             'view',
+            'view_all',
             'create',
             'update',
             'delete',
